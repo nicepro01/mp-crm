@@ -2,9 +2,13 @@ import { NextResponse } from "next/server";
 import { syncSeasonalityFromYandexMarketBackfill } from "@/lib/seasonalitySync";
 
 // Может идти десятки минут (рейт-лимит Яндекса — 1 запрос генерации отчёта
-// в 2 мин, общий на обе кампании) — не рассчитан на serverless с коротким
-// таймаутом, только на длительно живущий процесс (как в этом проекте).
-export const maxDuration = 3600;
+// в 2 мин, общий на обе кампании) — изначально не рассчитан на serverless с
+// коротким таймаутом. 300 — максимум, который Vercel вообще разрешает для
+// serverless-функции на тарифе Hobby (на других тарифах лимит выше, но всё
+// равно меньше времени, чем нужно для полного бэкфилла на много месяцев
+// сразу) — на Vercel имеет смысл запрашивать monthsBack=1 за один вызов,
+// нажимая кнопку повторно для каждого следующего месяца.
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
