@@ -20,7 +20,11 @@ export default function LoginForm() {
     setSaving(false);
 
     if (result?.error) {
-      setError("Неверный email или пароль");
+      setError(
+        result.error === "not_approved"
+          ? "Аккаунт создан, но ещё ждёт подтверждения — попробуйте зайти позже"
+          : "Неверный email или пароль"
+      );
       return;
     }
 
@@ -48,6 +52,9 @@ export default function LoginForm() {
       </div>
       <p className="muted">
         Ещё нет компании? <a href="/signup">Зарегистрировать</a>
+      </p>
+      <p className="muted">
+        Забыли пароль? <a href="/forgot-password">Восстановить</a>
       </p>
     </form>
   );

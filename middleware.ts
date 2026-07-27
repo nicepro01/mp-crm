@@ -8,7 +8,15 @@ import { authConfig } from "@/lib/auth.config";
 // Edge Runtime, где выполняется middleware, не работает).
 const { auth } = NextAuth(authConfig);
 
-const PUBLIC_PATHS = new Set(["/login", "/signup", "/api/signup"]);
+const PUBLIC_PATHS = new Set([
+  "/login",
+  "/signup",
+  "/api/signup",
+  "/forgot-password",
+  "/api/forgot-password",
+  "/reset-password",
+  "/api/reset-password",
+]);
 
 // Без сессии: публичные страницы/API пропускаем как есть, остальные API —
 // 401 JSON (а не редирект — fetch() иначе тихо получит HTML логина вместо

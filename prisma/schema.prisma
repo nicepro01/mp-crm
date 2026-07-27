@@ -65,13 +65,39 @@ model User {
   passwordHash String
   name         String?
 
+  // Новую регистрацию нужно вручную одобрить (см. app/admin) — до этого
+  // войти нельзя, см. authorize() в lib/auth.ts. Первые пользователи,
+  // заведённые ещё до этого поля (миграция задаёт default(false) — значит
+  // существующих тоже придётся одобрить один раз вручную).
+  approved   Boolean   @default(false)
+  approvedAt DateTime?
+
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  resetTokens PasswordResetToken[]
 
   createdAt DateTime @default(now())
 
   @@index([companyId])
   @@map("users")
+}
+
+// Токен для восстановления пароля — одноразовый, с истечением срока.
+// Письмо со ссылкой отправляется через Resend (см. lib/email.ts).
+model PasswordResetToken {
+  id     String @id @default(uuid())
+  token  String @unique
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("password_reset_tokens")
 }
 
 // ---------------------------------------------------------------------

@@ -1,8 +1,15 @@
-import NextAuth from "next-auth";
+import NextAuth, { CredentialsSignin } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { authConfig } from "@/lib/auth.config";
+
+// code попадает в result.error при signIn({redirect:false}) на клиенте —
+// так LoginForm.tsx может показать точную причину, а не общее "неверный
+// пароль", когда на самом деле аккаунт просто ждёт одобрения.
+class NotApprovedError extends CredentialsSignin {
+  code = "not_approved";
+}
 
 // Полный конфиг (с Credentials-провайдером, который обращается к Prisma) —
 // используется в API route handler'е и на сервере (server components,
@@ -30,6 +37,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const valid = await bcrypt.compare(password, user.passwordHash);
         if (!valid) return null;
+
+        // Новую регистрацию нужно одобрить вручную (см. app/admin) — до
+        // этого вход не пускаем, даже с верным паролем.
+        if (!user.approved) throw new NotApprovedError();
 
         return {
           id: user.id,

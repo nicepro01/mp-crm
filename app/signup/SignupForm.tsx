@@ -10,6 +10,7 @@ export default function SignupForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
   const [saving, setSaving] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -30,17 +31,32 @@ export default function SignupForm() {
       return;
     }
 
+    // Большинству новых аккаунтов ещё нужно одобрение — signIn просто
+    // подтвердит это через код not_approved, входить сразу не получится.
     const signInResult = await signIn("credentials", { email, password, redirect: false });
     setSaving(false);
 
+    if (signInResult?.error === "not_approved") {
+      setPending(true);
+      return;
+    }
     if (signInResult?.error) {
-      setError("Компания создана, но вход не удался — попробуйте войти вручную");
+      setError("Аккаунт создан, но вход не удался — попробуйте войти вручную");
       router.push("/login");
       return;
     }
 
     router.push("/");
     router.refresh();
+  }
+
+  if (pending) {
+    return (
+      <p className="muted">
+        Заявка принята. Аккаунту нужно подтверждение — как только его одобрят, сможете войти на{" "}
+        <a href="/login">странице входа</a>.
+      </p>
+    );
   }
 
   return (

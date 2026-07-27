@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
+import { isSuperAdminEmail } from "@/lib/superadmin";
 
 // Регистрация новой компании — создаёт Company + первого User атомарно.
 // Этот пользователь не получает больше прав, чем остальные сотрудники той
@@ -34,10 +35,13 @@ export async function POST(req: NextRequest) {
     // UNSCOPED_MODELS в lib/prisma.ts), поэтому create здесь идёт без
     // runWithTenant — контекста ещё и не может быть, это же и есть
     // создание первой компании.
+    // Владельца всего сервиса (см. SUPERADMIN_EMAILS) одобрять некому —
+    // остальные ждут ручного подтверждения в /admin.
+    const approved = isSuperAdminEmail(email);
     await prisma.$transaction(async (tx) => {
       const company = await tx.company.create({ data: { name: companyName } });
       await tx.user.create({
-        data: { email, passwordHash, name, companyId: company.id },
+        data: { email, passwordHash, name, companyId: company.id, approved, approvedAt: approved ? new Date() : null },
       });
     });
     return NextResponse.json({ ok: true }, { status: 201 });

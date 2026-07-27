@@ -9,10 +9,14 @@ import { getCurrentCompanyId } from "./tenantContext";
 //   там, где реально нужен список "пользователи ЭТОЙ компании" (напр.
 //   будущая страница участников), companyId дописывается в where вручную,
 //   это один вызов, а не десятки.
+// - PasswordResetToken — используется в /api/forgot-password и
+//   /api/reset-password, где сессии (и значит tenant-контекста) ещё нет
+//   вообще — токен ищется по самому себе, глобально. У модели и в схеме
+//   нет поля companyId, изоляция ей не нужна (она уже привязана к userId).
 // Любая ДРУГАЯ модель обязана иметь companyId в схеме — если появится новая
 // модель без него, обращение к ней упадёт с понятной ошибкой (см.
 // getCurrentCompanyId), а не молча вернёт данные без фильтрации.
-const UNSCOPED_MODELS = new Set(["Company", "User"]);
+const UNSCOPED_MODELS = new Set(["Company", "User", "PasswordResetToken"]);
 
 const READ_UPDATE_DELETE_OPERATIONS = new Set([
   "findFirst",
