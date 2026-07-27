@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 // lib/prisma.ts), поэтому здесь не нужен runWithTenant — это единственное
 // место в приложении, которое сознательно смотрит НА ВСЕ компании сразу.
 export default async function AdminPage() {
-  await requireSuperAdmin();
+  const session = await requireSuperAdmin();
 
   const users = await prisma.user.findMany({
     include: { company: true },
@@ -32,7 +32,7 @@ export default async function AdminPage() {
       <p className="muted">
         Все компании и пользователи, зарегистрированные в системе — видно только владельцу сервиса.
       </p>
-      <AdminUsersTable rows={rows} />
+      <AdminUsersTable rows={rows} currentUserEmail={session.user?.email ?? ""} />
     </div>
   );
 }
