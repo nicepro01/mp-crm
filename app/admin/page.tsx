@@ -19,6 +19,7 @@ export default async function AdminPage() {
     id: u.id,
     email: u.email,
     name: u.name,
+    position: u.position,
     companyName: u.company.name,
     approved: u.approved,
     createdAt: u.createdAt.toISOString(),

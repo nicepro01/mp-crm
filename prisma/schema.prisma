@@ -64,6 +64,7 @@ model User {
   email        String   @unique
   passwordHash String
   name         String?
+  position     String? // Должность — просто подпись для админки, на доступ не влияет.
 
   // Новую регистрацию нужно вручную одобрить (см. app/admin) — до этого
   // войти нельзя, см. authorize() в lib/auth.ts. Первые пользователи,

@@ -7,6 +7,7 @@ type Row = {
   id: string;
   email: string;
   name: string | null;
+  position: string | null;
   companyName: string;
   approved: boolean;
   createdAt: string;
@@ -21,6 +22,9 @@ export default function AdminUsersTable({
 }) {
   const router = useRouter();
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [positions, setPositions] = useState<Record<string, string>>(
+    Object.fromEntries(rows.map((r) => [r.id, r.position ?? ""]))
+  );
 
   async function handleApprove(id: string) {
     setSavingId(id);
@@ -28,6 +32,21 @@ export default function AdminUsersTable({
     setSavingId(null);
     if (!res.ok) {
       alert("Не удалось одобрить");
+      return;
+    }
+    router.refresh();
+  }
+
+  async function handleSavePosition(id: string) {
+    setSavingId(id);
+    const res = await fetch(`/api/admin/users/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ position: positions[id] ?? "" }),
+    });
+    setSavingId(null);
+    if (!res.ok) {
+      alert("Не удалось сохранить должность");
       return;
     }
     router.refresh();
@@ -52,6 +71,7 @@ export default function AdminUsersTable({
         <tr>
           <th>Email</th>
           <th>Имя</th>
+          <th>Должность</th>
           <th>Компания</th>
           <th>Зарегистрирован</th>
           <th>Статус</th>
@@ -63,6 +83,27 @@ export default function AdminUsersTable({
           <tr key={r.id}>
             <td>{r.email}</td>
             <td>{r.name ?? "—"}</td>
+            <td>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  type="text"
+                  value={positions[r.id] ?? ""}
+                  onChange={(e) => setPositions((p) => ({ ...p, [r.id]: e.target.value }))}
+                  placeholder="Не указана"
+                  style={{ width: 140 }}
+                />
+                {positions[r.id] !== (r.position ?? "") && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={savingId === r.id}
+                    onClick={() => handleSavePosition(r.id)}
+                  >
+                    {savingId === r.id ? "…" : "Сохранить"}
+                  </button>
+                )}
+              </div>
+            </td>
             <td>{r.companyName}</td>
             <td>{new Date(r.createdAt).toLocaleString("ru-RU")}</td>
             <td>
