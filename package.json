@@ -1,0 +1,39 @@
+{
+  "name": "mp-crm",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "postinstall": "prisma generate",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "@supabase/supabase-js": "^2.110.0",
+    "@types/papaparse": "^5.5.2",
+    "bcryptjs": "^3.0.3",
+    "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
+    "next": "^14.2.0",
+    "next-auth": "^5.0.0-beta.32",
+    "papaparse": "^5.5.4",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.0",
+    "prisma": "^5.20.0",
+    "typescript": "^5.5.0"
+  },
+  "allowScripts": {
+    "@prisma/client@5.22.0": true,
+    "@prisma/engines@5.22.0": true,
+    "prisma@5.22.0": true
+  }
+}

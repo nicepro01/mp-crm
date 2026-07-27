@@ -1,0 +1,570 @@
+/* По умолчанию — тёмная тема (без атрибута тоже тёмная, чтобы не было
+   вспышки светлой темы до того, как отработает скрипт переключателя).
+   Светлая тема — только через [data-theme="light"] ниже. */
+:root {
+  --bg: #14161a;
+  --fg: #e5e7eb;
+  --surface: #1c1f26;
+  --surface-alt: #262a33;
+  --border: #343a46;
+  --muted: #9aa1ac;
+  --input-bg: #12141a;
+  --input-border: #3a3f4b;
+  --link: #60a5fa;
+  --link-hover: #93c5fd;
+  --shadow: rgba(0, 0, 0, 0.45);
+  --btn-bg: #2563eb;
+  --btn-bg-hover: #3b82f6;
+  --btn-danger: #dc2626;
+  --btn-danger-hover: #ef4444;
+  --btn-secondary: #4b5563;
+  --btn-secondary-hover: #6b7280;
+  --error-bg: #3a1418;
+  --error-fg: #fca5a5;
+  --margin-positive: #4ade80;
+  --margin-negative: #f87171;
+}
+
+:root[data-theme="light"] {
+  --bg: #f5f6f8;
+  --fg: #1a1a1a;
+  --surface: #ffffff;
+  --surface-alt: #f3f4f6;
+  --border: #e5e7eb;
+  --muted: #6b7280;
+  --input-bg: #ffffff;
+  --input-border: #d1d5db;
+  --link: #2563eb;
+  --link-hover: #93c5fd;
+  --shadow: rgba(0, 0, 0, 0.08);
+  --btn-bg: #2563eb;
+  --btn-bg-hover: #1d4ed8;
+  --btn-danger: #dc2626;
+  --btn-danger-hover: #b91c1c;
+  --btn-secondary: #6b7280;
+  --btn-secondary-hover: #4b5563;
+  --error-bg: #fef2f2;
+  --error-fg: #dc2626;
+  --margin-positive: #16a34a;
+  --margin-negative: #dc2626;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Высота фиксированная (не зависит от контента), чтобы прилипающие
+   заголовки таблиц ниже могли надёжно посчитать отступ и не залезать
+   под навигацию (см. NAV_HEIGHT в SortableTable.tsx — держать в синхроне). */
+nav {
+  background: #111827;
+  height: 56px;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+nav a {
+  color: #f5f6f8;
+  font-weight: 500;
+}
+
+nav a:hover {
+  color: #93c5fd;
+  text-decoration: none;
+}
+
+.nav-spacer {
+  flex: 1;
+}
+
+main {
+  max-width: 1800px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+h1 {
+  font-size: 22px;
+  margin-bottom: 16px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px var(--shadow);
+  /* Никакого overflow: hidden на самой таблице — иначе именно она (а не
+     страница) становится ближайшим скролл-контейнером для position: sticky
+     в заголовке, и прилипание перестаёт работать. Скруглённые углы вместо
+     этого делаем точечно на угловых ячейках ниже. */
+}
+
+th, td {
+  text-align: left;
+  vertical-align: top;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  overflow-wrap: break-word;
+}
+
+th {
+  background: var(--surface-alt);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+thead th {
+  position: sticky;
+  top: 56px; /* высота nav — иначе заголовок таблицы лезет под навигацию */
+  z-index: 1;
+}
+
+thead tr:first-child th:first-child {
+  border-top-left-radius: 8px;
+}
+
+thead tr:first-child th:last-child {
+  border-top-right-radius: 8px;
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+tbody tr:last-child td:first-child {
+  border-bottom-left-radius: 8px;
+}
+
+tbody tr:last-child td:last-child {
+  border-bottom-right-radius: 8px;
+}
+
+tfoot td {
+  background: var(--surface-alt);
+  border-top: 2px solid var(--border);
+  border-bottom: none;
+}
+
+tfoot tr:last-child td:first-child {
+  border-bottom-left-radius: 8px;
+}
+
+tfoot tr:last-child td:last-child {
+  border-bottom-right-radius: 8px;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.btn {
+  display: inline-block;
+  background: var(--btn-bg);
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: var(--btn-bg-hover);
+  text-decoration: none;
+}
+
+.btn-danger {
+  background: var(--btn-danger);
+}
+
+.btn-danger:hover {
+  background: var(--btn-danger-hover);
+}
+
+.btn-secondary {
+  background: var(--btn-secondary);
+}
+
+.btn-secondary:hover {
+  background: var(--btn-secondary-hover);
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--surface);
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px var(--shadow);
+  max-width: 560px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  font-weight: 500;
+  gap: 4px;
+}
+
+input, select, textarea {
+  font-size: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  font-family: inherit;
+  background: var(--input-bg);
+  color: var(--fg);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Иконки редактировать/удалить в таблицах — друг под другом, а не в ряд. */
+.row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.icon-btn:hover {
+  background: var(--surface-alt);
+  color: var(--fg);
+}
+
+.icon-btn-danger:hover {
+  background: var(--error-bg);
+  color: var(--btn-danger);
+}
+
+/* Булавка "закрепить первым уровнем сортировки" в заголовках таблиц —
+   рядом с текстом заголовка, поэтому маленькая и без лишних отступов. */
+.sort-pin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.5;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+th:hover .sort-pin-btn {
+  opacity: 1;
+}
+
+.sort-pin-btn:hover {
+  background: var(--surface);
+  color: var(--fg);
+}
+
+.sort-pin-btn-active {
+  color: var(--link);
+  opacity: 1;
+}
+
+.sort-pin-btn-active:hover {
+  color: var(--link-hover);
+}
+
+.product-picker-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-top: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px var(--shadow);
+}
+
+.product-picker-option {
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.product-picker-option:hover {
+  background: var(--surface-alt);
+}
+
+.photo-thumb-wrapper {
+  position: relative;
+  flex-shrink: 0;
+  cursor: zoom-in;
+}
+
+.photo-thumb-zoom-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.photo-thumb-wrapper:hover .photo-thumb-zoom-overlay {
+  opacity: 1;
+}
+
+.photo-lightbox-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+  padding: 32px;
+}
+
+.photo-lightbox-image {
+  max-width: min(90vw, 800px);
+  max-height: 85vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+
+.error {
+  color: var(--error-fg);
+  font-size: 14px;
+  background: var(--error-bg);
+  padding: 8px 12px;
+  border-radius: 6px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.table-scroll {
+  /* Больше не создаёт свой скролл-контейнер (ни по горизонтали, ни по
+     вертикали) — таблица тянется на всю ширину и скроллится вместе со
+     страницей, иначе ломается прилипающий заголовок (см. thead th выше). */
+}
+
+/* Плотный режим (SortableTable dense=true) — для таблиц с большим числом
+   колонок (напр. "Все товары" на Аналитике). table-layout: fixed вместе с
+   явной шириной колонок (SortableColumn.width) заставляет браузер уложить
+   всю таблицу в ширину контейнера вместо того, чтобы раздувать её по
+   содержимому (число/SKU без пробелов) и вызывать боковой скролл страницы —
+   лишний текст переносится внутри ячейки, а не расширяет колонку. */
+.table-dense {
+  table-layout: fixed;
+}
+
+.table-dense th,
+.table-dense td {
+  padding: 4px 5px;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.table-dense th {
+  font-size: 12px;
+}
+
+/* Тот же плотный режим, но с чуть более крупным шрифтом (см. denseFontSize
+   на SortableTable) — для таблиц, где после сужения колонок текст стал
+   мелковат, но по ширине всё ещё укладывается в экран. */
+.table-dense-lg th,
+.table-dense-lg td {
+  padding: 4px 5px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.table-dense-lg {
+  table-layout: fixed;
+}
+
+.table-dense-lg th {
+  font-size: 13.5px;
+}
+
+.margin-positive {
+  color: var(--margin-positive);
+  font-weight: 600;
+}
+
+.margin-negative {
+  color: var(--margin-negative);
+  font-weight: 600;
+}
+
+.theme-toggle {
+  background: none;
+  border: 1px solid #3a3f4b;
+  color: #f5f6f8;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  border-color: #60a5fa;
+  color: #93c5fd;
+}
+
+/* Канбан-доска "Задачи" — колонки в ряд, каждая со своим скроллом по
+   вертикали (сама доска скроллится по горизонтали, см. inline overflowX на
+   контейнере в TaskBoard.tsx). */
+.task-column {
+  background: var(--surface-alt);
+  border-radius: 8px;
+  width: 272px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 160px);
+}
+
+.task-column-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 10px 4px;
+  cursor: grab;
+}
+
+.task-column-body {
+  padding: 4px 8px 8px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 40px;
+}
+
+.task-card {
+  background: var(--surface);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  box-shadow: 0 1px 2px var(--shadow);
+  cursor: grab;
+}
+
+.task-card:hover {
+  box-shadow: 0 2px 6px var(--shadow);
+}
+
+.task-card:active {
+  cursor: grabbing;
+}
+
+.task-drop-line {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--link);
+  margin: 2px 0 4px;
+}
+
+.task-add-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 6px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.task-add-btn:hover {
+  background: var(--surface);
+  color: var(--fg);
+}
+
+.task-modal {
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 20px;
+  width: 100%;
+  max-width: 480px;
+  max-height: 85vh;
+  overflow-y: auto;
+  cursor: default;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.task-due-badge {
+  display: inline-block;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-alt);
+  color: var(--muted);
+}
+
+.task-due-badge-overdue {
+  background: var(--error-bg);
+  color: var(--error-fg);
+}

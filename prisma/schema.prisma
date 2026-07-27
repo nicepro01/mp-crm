@@ -1,0 +1,866 @@
+// =====================================================================
+// MP-CRM — единая система учёта товаров, партий из Китая, остатков
+// на 3 маркетплейсах + своём складе, и юнит-экономики.
+// =====================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------
+// 0. КОМПАНИИ И ПОЛЬЗОВАТЕЛИ (мультитенантность)
+// ---------------------------------------------------------------------
+// Company — единица изоляции данных: каждая компания видит только свои
+// строки во ВСЕХ моделях ниже (companyId добавлен напрямую на каждую, а не
+// только на "корневые" модели — иначе на каждый из ~80 файлов, читающих
+// Prisma, пришлось бы вручную писать вложенные фильтры через связи; так
+// изоляция включается одним универсальным Prisma Client Extension'ом, см.
+// lib/prisma.ts). Внутри одной компании роли не разделяются — все
+// пользователи имеют одинаковый полный доступ (осознанное решение).
+model Company {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  users User[]
+
+  products                  Product[]
+  productCostHistory        ProductCostHistory[]
+  suppliers                 Supplier[]
+  supplierPrices            SupplierPrice[]
+  batches                   Batch[]
+  batchItems                BatchItem[]
+  unitCosts                 UnitCost[]
+  cogsAllocations           CogsAllocation[]
+  marketplaces              Marketplace[]
+  mpListings                MpListing[]
+  mpImportItems             MpImportItem[]
+  warehouses                Warehouse[]
+  stock                     Stock[]
+  orders                    Order[]
+  orderItems                OrderItem[]
+  unitEconomics             UnitEconomics[]
+  productStockAnalytics     ProductStockAnalytics[]
+  productClusterAnalytics   ProductClusterAnalytics[]
+  productWarehouseAnalytics ProductWarehouseAnalytics[]
+  productMonthlySales       ProductMonthlySales[]
+  returnClaims              ReturnClaim[]
+  taskColumns               TaskColumn[]
+  tasks                     Task[]
+  taskAttachments           TaskAttachment[]
+
+  @@map("companies")
+}
+
+// Один email — один аккаунт на всю систему (не на компанию), стандартная
+// практика для SaaS с регистрацией через /signup.
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------
+// 1. ТОВАРЫ
+// ---------------------------------------------------------------------
+model Product {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  sku      String
+  name     String
+  category String?
+  photoUrl String?
+  barcode  String? // EAN/UPC — надёжнее для матчинга с площадками, чем vendorCode/mpSku
+
+  // Короткий внутренний код продавца (тот, что видно в выгрузках площадок
+  // и в файлах юнит-экономики) — часто совпадает у одного и того же товара
+  // сразу на нескольких площадках, поэтому удобен как надёжный ключ для
+  // сопоставления при импорте, в отличие от sku (у нас это может быть
+  // числовой SKU конкретной площадки) или названия (везде своё).
+  vendorCode String?
+
+  // Основной поставщик — на практике товар всегда закупается у одного и того
+  // же поставщика. Используется, чтобы автоматически подставлять поставщика
+  // при добавлении позиции в поставку (см. app/api/batches/[id]/items).
+  supplierId String?
+  supplier   Supplier? @relation(fields: [supplierId], references: [id])
+
+  // Закупочная цена — НЕ редактируется вручную, автоматически подтягивается
+  // и обновляется из цены за штуку в последней сохранённой позиции поставки
+  // этого товара (см. lib/productCostSync.ts). Отдельно от FIFO/landedCost
+  // (см. UnitCost, CogsAllocation) — те считаются по фактическому движению
+  // партий и продаж и используются для честной пост-фактум маржи.
+  purchasePriceRub Decimal? @db.Decimal(12, 2)
+
+  // Габариты и вес самого товара
+  itemWeightG  Decimal @db.Decimal(10, 2)
+  itemLengthMm Int
+  itemWidthMm  Int
+  itemHeightMm Int
+
+  // Данные по коробке (упаковке)
+  unitsPerBox Int
+  boxWeightKg Decimal @db.Decimal(10, 3)
+  boxLengthMm Int
+  boxWidthMm  Int
+  boxHeightMm Int
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Ручной коэффициент ожидаемого сезонного спроса (Wordstat, фидбек
+  // менеджеров и т.д.) — не считается автоматически, реальной истории
+  // продаж для этого пока недостаточно (WB API отдаёт только ~6-7 мес.).
+  // 1 = без поправки. Влияет только на рекомендованное количество заказа
+  // в Аналитике/Планировщике поставок, не на срочность (дни до конца
+  // остатка считаются по фактическому текущему темпу продаж).
+  seasonalDemandMultiplier Decimal @default(1) @db.Decimal(4, 2)
+
+  supplierPrices   SupplierPrice[]
+  batchItems       BatchItem[]
+  mpListings       MpListing[]
+  stock            Stock[]
+  orderItems       OrderItem[]
+  unitEconomics    UnitEconomics[]
+  mpImportMatches  MpImportItem[]
+  costHistory      ProductCostHistory[]
+  stockAnalytics     ProductStockAnalytics[]
+  clusterAnalytics   ProductClusterAnalytics[]
+  warehouseAnalytics ProductWarehouseAnalytics[]
+  returnClaims       ReturnClaim[]
+  monthlySales       ProductMonthlySales[]
+
+  // sku/barcode/vendorCode уникальны В ПРЕДЕЛАХ компании, а не глобально —
+  // разные компании независимо могут использовать те же значения.
+  @@unique([companyId, sku])
+  @@unique([companyId, barcode])
+  @@unique([companyId, vendorCode])
+  @@index([companyId])
+  @@map("products")
+}
+
+// Лог изменений закупочной цены — формируется только автоматически: при
+// сохранении каждой позиции поставки, если цена в ней отличается от текущей
+// закупочной цены товара, пишется запись со ссылкой на эту позицию/поставку.
+// Ручного редактирования истории нет.
+model ProductCostHistory {
+  id        String  @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  oldCost Decimal? @db.Decimal(12, 2) // null для самой первой записи
+  newCost Decimal  @db.Decimal(12, 2)
+
+  batchItemId String?
+  batchItem   BatchItem? @relation(fields: [batchItemId], references: [id])
+
+  changedAt DateTime @default(now())
+
+  @@index([productId, changedAt])
+  @@index([companyId])
+  @@map("product_cost_history")
+}
+
+// ---------------------------------------------------------------------
+// 2. ПОСТАВЩИКИ + СРАВНЕНИЕ ЦЕН
+// ---------------------------------------------------------------------
+model Supplier {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name         String
+  contactInfo  String?
+  paymentTerms String? // условия оплаты (аванс %, постоплата и т.д.)
+  moq          Int? // минимальный объём заказа
+  leadTimeDays Int?
+  rating       Int? // внутренняя оценка надёжности 1-5
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  prices                  SupplierPrice[]
+  batchItems              BatchItem[]
+  mainSupplierForProducts Product[]
+
+  @@index([companyId])
+  @@map("suppliers")
+}
+
+// История цен от поставщика по товару — для сравнения динамики
+model SupplierPrice {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+
+  priceCny  Decimal   @db.Decimal(12, 4)
+  validFrom DateTime
+  validTo   DateTime?
+  minQty    Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([productId, supplierId])
+  @@index([companyId])
+  @@map("supplier_prices")
+}
+
+// ---------------------------------------------------------------------
+// 3. ПОСТАВКИ ИЗ КИТАЯ
+// ---------------------------------------------------------------------
+enum LogisticsStatus {
+  PLANNED
+  PRODUCTION
+  IN_TRANSIT
+  CUSTOMS
+  ARRIVED
+  RECEIVED
+}
+
+// Поставка (накладная) может консолидировать позиции от нескольких
+// поставщиков — поставщик указывается на уровне позиции (BatchItem).
+// Никакой курсовой/логистической математики на уровне поставки больше нет —
+// закупочная цена за штуку в позиции уже готовое число в рублях.
+model Batch {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  batchNumber String // номер накладной — уникален в пределах компании
+
+  orderDate    DateTime
+  shipmentDate DateTime? // дата отгрузки от поставщика(ов)
+  etaDate      DateTime? // ожидаемая дата прибытия (план)
+  arrivedDate  DateTime? // фактическая дата прибытия
+
+  logisticsStatus LogisticsStatus @default(PLANNED)
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items BatchItem[]
+
+  @@unique([companyId, batchNumber])
+  @@index([companyId])
+  @@map("batches")
+}
+
+// Позиции внутри поставки — что едет, сколько, по какой цене за штуку
+model BatchItem {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  batchId    String
+  batch      Batch     @relation(fields: [batchId], references: [id])
+  productId  String
+  product    Product   @relation(fields: [productId], references: [id])
+  // Поставщик подставляется автоматически из Product.supplierId при
+  // сохранении позиции — может быть null, если у товара ещё не указан
+  // основной поставщик (не блокируем добавление позиции ради этого).
+  supplierId String?
+  supplier   Supplier? @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  qty              Int
+  purchasePriceRub Decimal @db.Decimal(12, 2) // закупочная цена за 1 шт, уже готовое число в рублях
+
+  createdAt DateTime @default(now())
+
+  unitCost           UnitCost?
+  cogsAllocations    CogsAllocation[]
+  costHistoryEntries ProductCostHistory[]
+
+  @@index([batchId])
+  @@index([productId])
+  @@index([supplierId])
+  @@index([companyId])
+  @@map("batch_items")
+}
+
+// Себестоимость юнита для этой позиции — теперь это просто копия
+// purchasePriceRub (логистика на уровне поставки больше не считается),
+// но структура сохранена, чтобы FIFO/CogsAllocation не менялись.
+model UnitCost {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  batchItemId String    @unique
+  batchItem   BatchItem @relation(fields: [batchItemId], references: [id])
+
+  productCostRub   Decimal @db.Decimal(12, 2) // = purchasePriceRub позиции
+  logisticsCostRub Decimal @db.Decimal(12, 2) // всегда 0 — логистику на уровне поставки убрали
+  landedCostRub    Decimal @db.Decimal(12, 2) // = purchasePriceRub позиции
+
+  calculatedAt DateTime @default(now())
+
+  @@index([companyId])
+  @@map("unit_costs")
+}
+
+// Журнал FIFO-списания: какая партия (BatchItem) и в каком количестве
+// была списана на конкретную продажу (OrderItem), по какой себестоимости
+// на МОМЕНТ списания (снимок landedCostRub — история не меняется задним числом,
+// даже если курс/логистика партии позже будут отредактированы).
+model CogsAllocation {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  orderItemId String
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id])
+  batchItemId String
+  batchItem   BatchItem @relation(fields: [batchItemId], references: [id])
+
+  qty         Int
+  unitCostRub Decimal @db.Decimal(12, 2) // landedCostRub партии на момент списания
+
+  createdAt DateTime @default(now())
+
+  @@index([orderItemId])
+  @@index([batchItemId])
+  @@index([companyId])
+  @@map("cogs_allocations")
+}
+
+// ---------------------------------------------------------------------
+// 4. МАРКЕТПЛЕЙСЫ И ЛИСТИНГИ
+// ---------------------------------------------------------------------
+enum MarketplaceCode {
+  WB
+  OZON
+  YANDEX_MARKET
+}
+
+model Marketplace {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  code MarketplaceCode // уникален в пределах компании — у каждой своя строка на площадку
+  name String
+
+  // Учётные данные API этой площадки, СВОИ у каждой компании (токен WB,
+  // clientId+apiKey Ozon, токен Яндекса) — раньше читались из глобальных
+  // process.env, теперь на компанию (см. lib/wbApi.ts/ozonApi.ts/
+  // yandexMarketApi.ts + страница "Настройки/Интеграции"). Форма зависит от
+  // площадки, поэтому Json, а не жёсткие колонки.
+  credentials Json?
+
+  // Расходы за последний синк юнит-экономики, которые площадка не привязала
+  // ни к одному товару (напр. у Ozon — реклама без sku, кросс-докинг) —
+  // разнести по конкретным SKU нельзя, но и молча терять эти деньги нельзя.
+  // Храним последний снимок, чтобы показывать статично, а не только сразу
+  // после нажатия кнопки синка.
+  unattributedAmountRub  Decimal?  @db.Decimal(12, 2)
+  unattributedOperations Int?
+  unattributedSyncedAt   DateTime?
+  // Разбивка той же суммы по категориям операций (напр. "Оплата за клик",
+  // "Кросс-докинг") — { [operationTypeName]: { amount, count } }.
+  unattributedBreakdown  Json?
+
+  listings         MpListing[]
+  warehouses       Warehouse[]
+  importItems      MpImportItem[]
+  stockAnalytics     ProductStockAnalytics[]
+  clusterAnalytics   ProductClusterAnalytics[]
+  warehouseAnalytics ProductWarehouseAnalytics[]
+  returnClaims       ReturnClaim[]
+  monthlySales       ProductMonthlySales[]
+
+  @@unique([companyId, code])
+  @@map("marketplaces")
+}
+
+model MpListing {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  productId     String
+  product       Product     @relation(fields: [productId], references: [id])
+  marketplaceId String
+  marketplace   Marketplace @relation(fields: [marketplaceId], references: [id])
+
+  mpSku           String // артикул/nmID на стороне маркетплейса
+  mpProductId     String? // внутренний ID МП, нужен для API-синка
+  commissionPct   Decimal  @db.Decimal(5, 2)
+  logisticsFeeRub Decimal? @db.Decimal(10, 2) // логистика МП за юнит
+  storageFeeRub   Decimal? @db.Decimal(10, 2) // хранение за юнит/период
+
+  currentPrice Decimal? @db.Decimal(10, 2)
+  isActive     Boolean  @default(true)
+
+  // marketplaceId уже однозначно определяет компанию (у каждой компании
+  // своя строка Marketplace) — составной ключ остаётся корректным без
+  // явного companyId внутри него.
+  @@unique([marketplaceId, mpSku])
+  @@index([companyId])
+  @@map("mp_listings")
+}
+
+enum MatchStatus {
+  PENDING
+  MATCHED
+  IGNORED
+}
+
+// Входящие позиции с площадки (реальный синк в Шаге 3 или тестовый импорт
+// сейчас), которые нужно сопоставить с Product. Приоритет сопоставления:
+// 1) точная привязка уже есть в MpListing, 2) штрихкод товара совпал,
+// 3) остаётся PENDING — ждёт ручного выбора. Product без подтверждения
+// никогда не создаётся автоматически.
+model MpImportItem {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  marketplaceId String
+  marketplace   Marketplace @relation(fields: [marketplaceId], references: [id])
+
+  mpSku   String
+  barcode String?
+  name    String? // название с площадки — для удобства ручного сопоставления
+
+  status           MatchStatus @default(PENDING)
+  matchedProductId String?
+  matchedProduct   Product?    @relation(fields: [matchedProductId], references: [id])
+  matchedVia       String? // "mp_listing" | "barcode" | "manual"
+
+  importedAt DateTime  @default(now())
+  resolvedAt DateTime?
+
+  @@unique([marketplaceId, mpSku])
+  @@index([status])
+  @@index([companyId])
+  @@map("mp_import_items")
+}
+
+// ---------------------------------------------------------------------
+// 5. СКЛАДЫ И ОСТАТКИ (свой склад под B2B + FBO/FBS каждого МП)
+// ---------------------------------------------------------------------
+enum WarehouseType {
+  OWN_B2B
+  MARKETPLACE_FBO
+  MARKETPLACE_FBS
+}
+
+model Warehouse {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name          String
+  type          WarehouseType
+  marketplaceId String?
+  marketplace   Marketplace?  @relation(fields: [marketplaceId], references: [id])
+
+  stock Stock[]
+
+  @@index([companyId])
+  @@map("warehouses")
+}
+
+model Stock {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+
+  qtyAvailable Int
+  qtyReserved  Int @default(0)
+  qtyInTransit Int @default(0)
+
+  syncedAt   DateTime @default(now())
+  syncSource String? // "manual" | "wb_api" | "ozon_api" | "ym_api"
+
+  @@unique([productId, warehouseId])
+  @@index([companyId])
+  @@map("stock")
+}
+
+// ---------------------------------------------------------------------
+// 6. ЗАКАЗЫ (B2B + продажи на маркетплейсах)
+// ---------------------------------------------------------------------
+enum OrderChannel {
+  B2B
+  WB
+  OZON
+  YANDEX_MARKET
+}
+
+enum OrderStatus {
+  NEW
+  CONFIRMED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  RETURNED
+}
+
+model Order {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  channel      OrderChannel
+  externalId   String? // ID заказа на стороне МП
+  orderDate    DateTime
+  status       OrderStatus  @default(NEW)
+  customerName String?
+
+  items OrderItem[]
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  qty      Int
+  priceRub Decimal @db.Decimal(10, 2)
+
+  cogsAllocations CogsAllocation[]
+
+  @@index([companyId])
+  @@map("order_items")
+}
+
+// ---------------------------------------------------------------------
+// 7. ЮНИТ-ЭКОНОМИКА
+// ---------------------------------------------------------------------
+model UnitEconomics {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  productId   String
+  product     Product          @relation(fields: [productId], references: [id])
+  marketplace MarketplaceCode?
+  periodMonth DateTime // на какой месяц рассчитано (расходы могут меняться)
+
+  cogsRub             Decimal  @db.Decimal(10, 2) // себестоимость (из UnitCost, FIFO)
+  inboundLogisticsRub Decimal  @db.Decimal(10, 2) // логистика до склада МП/своего склада
+  mpCommissionPct     Decimal? @db.Decimal(5, 2)
+  mpCommissionRub     Decimal  @db.Decimal(10, 2)
+  mpLogisticsRub      Decimal  @db.Decimal(10, 2)
+  storageRub          Decimal  @db.Decimal(10, 2)
+  acquiringRub        Decimal? @db.Decimal(10, 2) // эквайринг
+  otherFeesRub        Decimal? @db.Decimal(10, 2) // "другие услуги" площадки
+  adsRub              Decimal  @default(0) @db.Decimal(10, 2)
+  taxRub              Decimal  @db.Decimal(10, 2)
+  laborAllocRub       Decimal  @default(0) @db.Decimal(10, 2) // доля ФОТ на юнит
+
+  buybackPct Decimal? @db.Decimal(5, 2) // % выкупа — влияет на реальную логистику
+  payoutRub  Decimal? @db.Decimal(10, 2) // итого к оплате поставщику после всех удержаний
+  schemeType String? // FBO / FBS
+
+  returnsQty          Int      @default(0) // возвращено за период, шт
+  reverseLogisticsRub Decimal? @db.Decimal(10, 2) // обратная логистика (возврат/пересортировка склада) на ед. товара — уже вычтена из netMarginRub, не складывать повторно с mpLogisticsRub
+  // ОЦЕНКА, не факт: доля расходов площадки, которые она сама не привязала
+  // ни к одному товару (у Ozon — гл. образом реклама без sku), разнесённая
+  // пропорционально выручке этого товара за тот же период. Уже вычтена из
+  // netMarginRub — так же условно, как и вся эта строка.
+  allocatedOverheadRub Decimal? @db.Decimal(10, 2)
+
+  sellPriceRub Decimal @db.Decimal(10, 2)
+  netMarginRub Decimal @db.Decimal(10, 2)
+  netMarginPct Decimal @db.Decimal(6, 2)
+
+  // Всё остальное из калькулятора, что не завели отдельным полем (кластеры
+  // поставки/доставки, базовый тариф, наценка, % соинвеста, разбивка НДС и
+  // т.д.) — чтобы не терять ни одной переменной из исходного файла.
+  details Json?
+
+  calculatedAt DateTime @default(now())
+
+  @@unique([productId, marketplace, periodMonth])
+  @@index([productId, periodMonth])
+  @@index([companyId])
+  @@map("unit_economics")
+}
+
+// ---------------------------------------------------------------------
+// 8. АНАЛИТИКА ОСТАТКОВ/ПРОДАЖ С ПЛОЩАДОК
+// ---------------------------------------------------------------------
+// Готовые метрики скорости продаж и ликвидности, которые площадка сама
+// считает в отчёте "Оборачиваемость" (у Ozon — лист "Товары", агрегат по
+// SKU за весь аккаунт). Храним только последний снимок на пару
+// (marketplaceId, mpSku) — как и Stock, это не история, а актуальное
+// состояние на момент последней загрузки отчёта.
+model ProductStockAnalytics {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  marketplaceId String
+  marketplace   Marketplace @relation(fields: [marketplaceId], references: [id])
+  productId     String
+  product       Product     @relation(fields: [productId], references: [id])
+
+  mpSku String
+
+  liquidityStatus  String? // текстовый статус площадки: "Дефицитный" | "Избыточный" | "Без продаж" и т.д., как есть
+  daysOfStockLeft  Int? // на сколько дней хватит остатка при текущих продажах; null — площадка не посчитала (нет истории продаж)
+  avgDailySalesQty Decimal @db.Decimal(10, 2) // среднесуточные продажи за 28 дней (Ozon) или за выбранный период (WB)
+  daysWithoutSales Int? // сколько дней подряд без продаж
+
+  qtyAvailable Int // доступно к продаже на момент отчёта
+  avgPriceRub  Decimal? @db.Decimal(10, 2) // средняя цена продажи за окно (считаем из финансовых транзакций для Ozon, из отчёта для WB/Яндекса)
+
+  syncedAt DateTime @default(now())
+
+  @@unique([marketplaceId, mpSku])
+  @@index([productId])
+  @@index([companyId])
+  @@map("product_stock_analytics")
+}
+
+// То же самое, но в разрезе по кластеру (региону) Ozon — один товар может
+// быть в дефиците в одном регионе и с избытком в другом, хотя в сумме по
+// аккаунту (см. ProductStockAnalytics) остаток выглядит нормально. Нужно,
+// чтобы находить перекос остатков между складами Ozon и предлагать
+// внутреннее перемещение вместо новой поставки из Китая.
+model ProductClusterAnalytics {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  marketplaceId String
+  marketplace   Marketplace @relation(fields: [marketplaceId], references: [id])
+  productId     String
+  product       Product     @relation(fields: [productId], references: [id])
+
+  mpSku       String
+  clusterName String // регион Ozon, например "Москва", "Красноярск"
+
+  liquidityStatus  String?
+  daysOfStockLeft  Int?
+  avgDailySalesQty Decimal @db.Decimal(10, 2)
+  daysWithoutSales Int?
+
+  qtyAvailable Int
+
+  syncedAt DateTime @default(now())
+
+  @@unique([marketplaceId, mpSku, clusterName])
+  @@index([productId])
+  @@index([companyId])
+  @@map("product_cluster_analytics")
+}
+
+// То же самое на уровне конкретного физического склада (а не кластера
+// Ozon целиком) — нужно для распределения поставок по городам в
+// Планировщике: сколько где реально лежит и продаётся. warehouseName — имя
+// склада WB/Ozon как отдаёт сама площадка ("Коледино", "ХАБАРОВСК_2_РФЦ");
+// у Яндекса пока нет читаемого имени склада — используется "Склад #<id>".
+model ProductWarehouseAnalytics {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  marketplaceId String
+  marketplace   Marketplace @relation(fields: [marketplaceId], references: [id])
+  productId     String
+  product       Product     @relation(fields: [productId], references: [id])
+
+  mpSku         String
+  warehouseName String
+
+  qtyAvailable     Int
+  avgDailySalesQty Decimal @db.Decimal(10, 2)
+
+  syncedAt DateTime @default(now())
+
+  @@unique([marketplaceId, mpSku, warehouseName])
+  @@index([productId])
+  @@index([companyId])
+  @@map("product_warehouse_analytics")
+}
+
+// Помесячные продажи товара — по каждой площадке (WB/Ozon/ЯМ) отдельная
+// строка на productId+marketplaceId+год+месяц, копим при каждой
+// синхронизации, а не перезаписываем всё целиком: площадки отдают вглубь
+// только несколько месяцев за один запрос, поэтому полная сезонная картина
+// по году набирается постепенно за счёт повторных синков со временем.
+// Индекс сезонности считается на лету суммированием по ВСЕМ площадкам
+// сразу (см. lib/seasonality.ts — запросы туда идут без фильтра по
+// marketplaceId), отдельного денормализованного поля с готовым
+// коэффициентом нет — иначе он мог бы разойтись с исходными данными.
+model ProductMonthlySales {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  marketplaceId String
+  marketplace   Marketplace @relation(fields: [marketplaceId], references: [id])
+
+  year  Int
+  month Int // 1-12
+
+  qtySold Int // штук продано за этот календарный месяц на этой площадке
+  // Сколько дней этого месяца реально попало в выгруженное окно (для
+  // первого/последнего месяца окна — может быть меньше полного месяца).
+  daysInPeriod Int
+
+  syncedAt DateTime @default(now())
+
+  @@unique([productId, marketplaceId, year, month])
+  @@index([productId])
+  @@index([companyId])
+  @@map("product_monthly_sales")
+}
+
+// Заявки на возврат от покупателей (WB: /api/v1/claims). productId нет,
+// пока товар не сматчен по nmId — то же самое допущение, что и у остальных
+// синков площадок (см. lib/matching.ts), Product не создаётся автоматически.
+model ReturnClaim {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  marketplaceId String
+  marketplace   Marketplace @relation(fields: [marketplaceId], references: [id])
+  productId     String?
+  product       Product?    @relation(fields: [productId], references: [id])
+
+  externalId  String // id заявки на стороне площадки
+  mpSku       String // nmId (WB) как строка — на случай будущих площадок
+  productName String? // название с площадки, для не сматченных заявок
+
+  // Статус — сырой код площадки, точного словаря WB не публикует, значения
+  // выведены по наблюдению за данными: 0 — новая заявка, 1 — одобрена,
+  // 2 — отклонена. Храним и текст как есть, на случай других статусов.
+  status     Int
+  reasonText String? // комментарий покупателя — почему возвращает
+  priceRub   Decimal? @db.Decimal(10, 2)
+  photos     Json? // ссылки на фото/видео от покупателя
+
+  orderDate DateTime?
+  claimDate DateTime
+  syncedAt  DateTime  @default(now())
+
+  @@unique([marketplaceId, externalId])
+  @@index([productId])
+  @@index([companyId])
+  @@map("return_claims")
+}
+
+// ---------------------------------------------------------------------
+// 9. ЗАДАЧИ (канбан-доска, как в Trello)
+// ---------------------------------------------------------------------
+// Одна доска на компанию (многодосочность не нужна — маленькая команда,
+// один рабочий процесс). order — Float, а не Int: при вставке карточки/
+// колонки между двумя соседними достаточно взять среднее их order,
+// не трогая order всех остальных строк.
+model TaskColumn {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  title     String
+  order     Float
+  createdAt DateTime @default(now())
+
+  tasks Task[]
+
+  @@index([companyId])
+  @@map("task_columns")
+}
+
+model Task {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  columnId String
+  column   TaskColumn @relation(fields: [columnId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  dueDate     DateTime?
+  order       Float
+
+  // Свободный текст, не связь на пользователя — ролей/учёток внутри
+  // компании нет (см. комментарий у Company), поэтому просто имя. Список
+  // ранее использованных имён подсказывается в форме (см. TaskBoard.tsx)
+  // на основе уже загруженных задач, без отдельного справочника в базе.
+  assignee String?
+
+  attachments TaskAttachment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([columnId])
+  @@index([companyId])
+  @@map("tasks")
+}
+
+// Вложения к задаче — файлы лежат в том же Supabase Storage bucket, что и
+// фото товаров (см. lib/supabase.ts), просто в другой папке — заводить
+// отдельный bucket ради этого не нужно. storagePath хранится отдельно от
+// публичного url, чтобы при удалении вложения можно было удалить сам файл
+// из Storage напрямую по пути, не разбирая URL.
+model TaskAttachment {
+  id      String @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  taskId String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  fileName    String
+  storagePath String
+  url         String
+  fileSize    Int
+  mimeType    String
+
+  createdAt DateTime @default(now())
+
+  @@index([taskId])
+  @@index([companyId])
+  @@map("task_attachments")
+}
