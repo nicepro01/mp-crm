@@ -11,7 +11,6 @@ export default async function AdminPage() {
   const session = await requireSuperAdmin();
 
   const users = await prisma.user.findMany({
-    include: { company: true },
     orderBy: { createdAt: "desc" },
   });
 
@@ -20,7 +19,6 @@ export default async function AdminPage() {
     email: u.email,
     name: u.name,
     position: u.position,
-    companyName: u.company.name,
     approved: u.approved,
     createdAt: u.createdAt.toISOString(),
   }));

@@ -8,7 +8,6 @@ type Row = {
   email: string;
   name: string | null;
   position: string | null;
-  companyName: string;
   approved: boolean;
   createdAt: string;
 };
@@ -72,7 +71,6 @@ export default function AdminUsersTable({
           <th>Email</th>
           <th>Имя</th>
           <th>Должность</th>
-          <th>Компания</th>
           <th>Зарегистрирован</th>
           <th>Статус</th>
           <th></th>
@@ -104,7 +102,6 @@ export default function AdminUsersTable({
                 )}
               </div>
             </td>
-            <td>{r.companyName}</td>
             <td>{new Date(r.createdAt).toLocaleString("ru-RU")}</td>
             <td>
               {r.approved ? (
