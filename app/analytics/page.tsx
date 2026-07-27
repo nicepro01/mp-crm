@@ -151,6 +151,7 @@ async function AnalyticsPageContent() {
         orderedQty: null,
         returnsQty: null,
         payoutRub: null,
+        buybackPct: null,
       };
     const cogsRub = Number(ue.cogsRub);
     const netMarginRub = Number(ue.netMarginRub);
@@ -191,6 +192,12 @@ async function AnalyticsPageContent() {
       // из выплаты ещё вычтена себестоимость (это не расход площадки, а
       // закупка).
       payoutRub: ue.payoutRub !== null ? Number(ue.payoutRub) : null,
+      // % выкупа — реальный сигнал с площадки (WB: заказы старше лага минус
+      // отменённые/не выкупленные на ПВЗ; Яндекс: доставлено ÷ (доставлено +
+      // невыкуплено), см. sync-wb/sync-yandex), не оценка. У Ozon пока нет
+      // сопоставимого сигнала (площадка не отдаёт отдельно неоплаченные
+      // заказы) — null, а не 0.
+      buybackPct: ue.buybackPct !== null ? Number(ue.buybackPct) : null,
     };
   }
 
@@ -468,6 +475,7 @@ async function AnalyticsPageContent() {
     { key: "avgPriceRub", label: "Цена, ₽", type: "number", description: "Средняя цена продажи за то же окно, что и скорость продаж. «Нет данных» — товар выставлен на площадке, но остатки/продажи ещё ни разу не синхронизировались", width: 52 },
     { key: "orderedQty", label: "Заказано, шт", type: "number", description: "Продано + возвращено за период последнего расчёта юнит-экономики (см. вкладку «Возвраты») — сколько всего штук оформили покупатели", width: 54 },
     { key: "returnsQty", label: "Возвращено, шт", type: "number", description: "Возвращено за тот же период — из последнего расчёта юнит-экономики (реальные данные из финотчёта площадки)", width: 54 },
+    { key: "buybackPct", label: "% выкупа", type: "number", description: "Доля заказов, которые покупатель реально забрал и оплатил (не отменил/не отказался на ПВЗ) — реальный сигнал с площадки, не оценка. Пусто — площадка не отдаёт такие данные (сейчас только WB и Яндекс.Маркет)", width: 48 },
     { key: "netMarginRub", label: "Прибыль с 1 шт, ₽", type: "number", description: "Чистая прибыль с одной проданной штуки — из последнего расчёта юнит-экономики (см. страницу «Юнит-экономика»)", width: 62 },
     { key: "netMarginPct", label: "Маржа, %", type: "number", description: "Прибыль с 1 шт в процентах от цены продажи", width: 46 },
     { key: "roiPct", label: "ROI, %", type: "number", description: "Прибыль с 1 шт в процентах от себестоимости — отдача на вложенный в закупку рубль", width: 44 },
