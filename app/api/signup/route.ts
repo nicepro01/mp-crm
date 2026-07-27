@@ -3,9 +3,11 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { isSuperAdminEmail } from "@/lib/superadmin";
 
-// Регистрация новой компании — создаёт Company + первого User атомарно.
-// Этот пользователь не получает больше прав, чем остальные сотрудники той
-// же компании (ролей внутри компании нет) — он просто первый.
+// Регистрация. Пока проектом пользуется одна команда (см. SHARED_COMPANY_ID) —
+// новые пользователи присоединяются к УЖЕ существующей компании, а не
+// получают каждый свою изолированную (та изоляция между компаниями остаётся
+// в коде на будущее — если SHARED_COMPANY_ID не задан, поведение прежнее:
+// каждая регистрация создаёт свою Company).
 export async function POST(req: NextRequest) {
   const data = await req.json();
   const email = typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
@@ -29,19 +31,19 @@ export async function POST(req: NextRequest) {
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
+  const sharedCompanyId = process.env.SHARED_COMPANY_ID;
 
   try {
     // User и Company — обе модели вне автофильтрации companyId (см.
     // UNSCOPED_MODELS в lib/prisma.ts), поэтому create здесь идёт без
-    // runWithTenant — контекста ещё и не может быть, это же и есть
-    // создание первой компании.
+    // runWithTenant.
     // Владельца всего сервиса (см. SUPERADMIN_EMAILS) одобрять некому —
     // остальные ждут ручного подтверждения в /admin.
     const approved = isSuperAdminEmail(email);
     await prisma.$transaction(async (tx) => {
-      const company = await tx.company.create({ data: { name: companyName } });
+      const companyId = sharedCompanyId ?? (await tx.company.create({ data: { name: companyName } })).id;
       await tx.user.create({
-        data: { email, passwordHash, name, companyId: company.id, approved, approvedAt: approved ? new Date() : null },
+        data: { email, passwordHash, name, companyId, approved, approvedAt: approved ? new Date() : null },
       });
     });
     return NextResponse.json({ ok: true }, { status: 201 });
