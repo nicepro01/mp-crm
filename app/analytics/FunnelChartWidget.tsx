@@ -88,15 +88,16 @@ export default function FunnelChartWidget({ code, marketplaceName }: { code: str
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range]);
 
-  async function handleSync() {
+  async function handleSync(bodyOverride?: Record<string, unknown>) {
     setSyncing(true);
     setSyncError(null);
     const cfg = SYNC_CONFIG[code];
+    const requestBody = bodyOverride ?? cfg.body;
     try {
       const res = await fetch(cfg.path, {
         method: "POST",
-        headers: cfg.body ? { "Content-Type": "application/json" } : undefined,
-        body: cfg.body ? JSON.stringify(cfg.body) : undefined,
+        headers: requestBody ? { "Content-Type": "application/json" } : undefined,
+        body: requestBody ? JSON.stringify(requestBody) : undefined,
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -170,12 +171,23 @@ export default function FunnelChartWidget({ code, marketplaceName }: { code: str
         <button
           type="button"
           className="btn btn-secondary"
-          onClick={handleSync}
+          onClick={() => handleSync()}
           disabled={syncing}
           style={{ marginLeft: "auto" }}
         >
           {syncing ? "Синхронизация…" : `Обновить ${marketplaceName}`}
         </button>
+        {code === "OZON" && (
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => handleSync({ windowDays: 365 })}
+            disabled={syncing}
+            title="Разово запросить историю на год назад вместо обычных 90 дней — окно Ozon не ограничено самой площадкой, в отличие от WB"
+          >
+            {syncing ? "Синхронизация…" : "Максимум (365 дней)"}
+          </button>
+        )}
       </div>
 
       {syncError && <p className="error">{syncError}</p>}
