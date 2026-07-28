@@ -219,7 +219,7 @@ export default function FunnelChartWidget({ code, marketplaceName }: { code: str
             valueSuffix="шт"
             showSegmentValues
             valueLabelPosition="below"
-            maxBarsPerRow={range === "90" ? 15 : undefined}
+            maxBarsPerRow={range === "90" ? 30 : undefined}
           />
           {typeof data?.requestedRange === "number" && data.availableDays < data.requestedRange && (
             <p className="muted" style={{ marginTop: 8 }}>
