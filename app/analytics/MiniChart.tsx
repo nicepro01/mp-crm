@@ -16,6 +16,12 @@ function formatValue(value: number, valueSuffix: string): string {
   return `${Math.round(value).toLocaleString("ru-RU")}${valueSuffix ? ` ${valueSuffix}` : ""}`;
 }
 
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
 // Лёгкий SVG-график без внешней библиотеки (в проекте её нет) — столбики по
 // месяцам, значение подписано прямо на столбике (компактно) + полная сумма
 // в подсказке при наведении. Резиновая ширина (viewBox + width="100%"),
@@ -29,6 +35,7 @@ export function MiniBarChart({
   valueSuffix = "",
   showSegmentValues = false,
   valueLabelPosition = "above",
+  maxBarsPerRow,
 }: {
   data: ChartBar[];
   color: string;
@@ -44,11 +51,61 @@ export function MiniBarChart({
   // итог под столбиком, над подписью даты (см. FunnelChartWidget — там
   // попросили убрать итог сверху, чтобы не перекрывал верхушку составного бара).
   valueLabelPosition?: "above" | "below";
+  // При большом числе точек (напр. 90 дней) один ряд сжимает бары до нечитаемой
+  // ширины (viewBox тянется на 100% контейнера независимо от их количества) —
+  // если задано, данные режутся на несколько рядов по maxBarsPerRow точек,
+  // каждый рисуется отдельным <svg> той же ширины, что и один полный ряд —
+  // бары остаются одной и той же читаемой ширины независимо от общего числа точек.
+  maxBarsPerRow?: number;
 }) {
   if (data.length === 0) {
     return <p className="muted">Нет данных за период.</p>;
   }
 
+  const rows = maxBarsPerRow && data.length > maxBarsPerRow ? chunk(data, maxBarsPerRow) : [data];
+  // Общий максимум по ВСЕМ рядам сразу — иначе одинаковое значение выглядело
+  // бы разной высоты столбика в разных рядах (масштаб должен быть общим).
+  const sharedMaxAbs = Math.max(...data.map((d) => Math.abs(d.value)), 1);
+  const sharedHasNegative = data.some((d) => d.value < 0);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {rows.map((rowData, rowIndex) => (
+        <MiniBarChartRow
+          key={rowIndex}
+          data={rowData}
+          color={color}
+          height={height}
+          valueSuffix={valueSuffix}
+          showSegmentValues={showSegmentValues}
+          valueLabelPosition={valueLabelPosition}
+          sharedMaxAbs={sharedMaxAbs}
+          sharedHasNegative={sharedHasNegative}
+        />
+      ))}
+    </div>
+  );
+}
+
+function MiniBarChartRow({
+  data,
+  color,
+  height,
+  valueSuffix,
+  showSegmentValues,
+  valueLabelPosition,
+  sharedMaxAbs,
+  sharedHasNegative,
+}: {
+  data: ChartBar[];
+  color: string;
+  height: number;
+  valueSuffix: string;
+  showSegmentValues: boolean;
+  valueLabelPosition: "above" | "below";
+  sharedMaxAbs: number;
+  sharedHasNegative: boolean;
+}) {
   const barWidth = 36;
   const gap = 16;
   const belowMode = valueLabelPosition === "below";
@@ -67,11 +124,10 @@ export function MiniBarChart({
   const sidePadding = 20;
   const viewWidth = plotWidth + sidePadding * 2;
   const plotHeight = height - monthLabelHeight - valueLabelHeight;
-  const maxAbs = Math.max(...data.map((d) => Math.abs(d.value)), 1);
   // Отрицательные значения (напр. убыточный месяц) уходят вниз от нулевой линии.
-  const hasNegative = data.some((d) => d.value < 0);
+  const hasNegative = sharedHasNegative;
   const zeroY = valueLabelHeight + (hasNegative ? plotHeight / 2 : plotHeight);
-  const scale = (hasNegative ? plotHeight / 2 : plotHeight) / maxAbs;
+  const scale = (hasNegative ? plotHeight / 2 : plotHeight) / sharedMaxAbs;
 
   return (
     <svg
