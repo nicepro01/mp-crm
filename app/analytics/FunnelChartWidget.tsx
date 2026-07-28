@@ -213,7 +213,7 @@ export default function FunnelChartWidget({ code, marketplaceName }: { code: str
             ))}
           </div>
 
-          <MiniBarChart data={chartBars} color="#374151" valueSuffix="шт" showSegmentValues />
+          <MiniBarChart data={chartBars} color="#374151" valueSuffix="шт" showSegmentValues valueLabelPosition="below" />
           {typeof data?.requestedRange === "number" && data.availableDays < data.requestedRange && (
             <p className="muted" style={{ marginTop: 8 }}>
               Показано {data.availableDays} из {data.requestedRange} запрошенных дней — история ещё не накопилась.

@@ -28,6 +28,7 @@ export function MiniBarChart({
   height = 240,
   valueSuffix = "",
   showSegmentValues = false,
+  valueLabelPosition = "above",
 }: {
   data: ChartBar[];
   color: string;
@@ -36,8 +37,13 @@ export function MiniBarChart({
   // Число прямо на каждом сегменте (не только в тултипе при наведении) —
   // нужно там, где сегментов немного и по ним важно видеть точные цифры
   // без наведения (см. FunnelChartWidget). Для узких сегментов (< minHeight)
-  // число не рисуется — иначе на паре пикселей текст просто нечитаем.
+  // число не рисуется — иначе на паре пикселей текст просто нечитаем
+  // (тултип на самом сегменте работает всегда, независимо от этого).
   showSegmentValues?: boolean;
+  // "above" (по умолчанию, как было всегда) — итог над столбиком. "below" —
+  // итог под столбиком, над подписью даты (см. FunnelChartWidget — там
+  // попросили убрать итог сверху, чтобы не перекрывал верхушку составного бара).
+  valueLabelPosition?: "above" | "below";
 }) {
   if (data.length === 0) {
     return <p className="muted">Нет данных за период.</p>;
@@ -45,8 +51,12 @@ export function MiniBarChart({
 
   const barWidth = 36;
   const gap = 16;
-  const monthLabelHeight = 40; // место под подписи снизу (до 2 строк, без поворота)
-  const valueLabelHeight = 18; // место над самым высоким столбиком под его подпись
+  const belowMode = valueLabelPosition === "below";
+  // В режиме "below" итог переезжает под столбик, в одну строку с датой —
+  // добавляем под него ещё одну текстовую строку высоты и убираем резерв
+  // сверху (там больше ничего не рисуется, место освобождается под сам бар).
+  const monthLabelHeight = belowMode ? 54 : 40;
+  const valueLabelHeight = belowMode ? 0 : 18;
   const plotWidth = data.length * (barWidth + gap) + gap;
   // Раньше подписи были повёрнуты на -40° — при малом числе баров (широкие
   // подписи вроде "Ozon возврат" на узкий viewBox) уходили за левый край и
@@ -78,8 +88,11 @@ export function MiniBarChart({
         const barHeight = Math.max(1, Math.abs(d.value) * scale);
         const y = d.value >= 0 ? zeroY - barHeight : zeroY;
         const centerX = x + barWidth / 2;
-        const monthLabelY = zeroY + (hasNegative ? plotHeight / 2 : 0) + 14;
-        const valueLabelY = d.value >= 0 ? y - 6 : y + barHeight + 12;
+        const belowBaseY = zeroY + (hasNegative ? plotHeight / 2 : 0);
+        // "below": сначала итог (belowBaseY+14), потом дата на 14px ниже него.
+        // "above": итог над баром как раньше, дата — сразу под нулевой линией.
+        const valueLabelY = belowMode ? belowBaseY + 14 : d.value >= 0 ? y - 6 : y + barHeight + 12;
+        const monthLabelY = belowMode ? belowBaseY + 28 : belowBaseY + 14;
         // Подсказка при наведении — через SVG-атрибут title (не элемент
         // <title>): Next.js перехватывает любой <title>-ЭЛЕМЕНТ в дереве как
         // заголовок страницы и обнуляет его содержимое (даже внутри SVG) —
@@ -109,7 +122,7 @@ export function MiniBarChart({
                 // масштабом (scale), что и общий столбик, — сумма высот
                 // сегментов совпадает с высотой обычного бара для того же total.
                 let cursor = zeroY;
-                const minLabelHeight = 12; // меньше — цифра физически не влезает, не рисуем
+                const minLabelHeight = 8; // меньше — цифра физически не влезает, не рисуем
                 return segments.map((s) => {
                   const segHeight = Math.max(0, Math.abs(s.value) * scale);
                   const segY = d.value >= 0 ? cursor - segHeight : cursor;
@@ -131,7 +144,7 @@ export function MiniBarChart({
                           x={centerX}
                           y={segY + segHeight / 2 + 3}
                           textAnchor="middle"
-                          fontSize={9}
+                          fontSize={8}
                           fontWeight={600}
                           fill="#fff"
                           // @ts-expect-error -- см. комментарий выше про <rect>
