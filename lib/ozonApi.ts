@@ -258,6 +258,58 @@ export async function fetchOzonFinanceTransactions(
   return rows;
 }
 
+// НЕ ПРОВЕРЕНО на реальном аккаунте Ozon — из среды разработки нет сети до
+// api-seller.ozon.ru, поля/статусы сверены только по документации. При первом
+// боевом запуске (см. lib/marketplaceFunnelSync.ts) нужно проверить, что
+// названия полей (in_process_at, status) и офсетная пагинация (has_next)
+// действительно совпадают с реальным ответом — и поправить при расхождении.
+export type OzonPostingRow = {
+  createdAt: string; // in_process_at — когда посылка создана/размещена
+  status: string; // "delivered" | "cancelled" | "awaiting_deliver" | ... — сырой статус Ozon
+};
+
+type PostingListResponse = {
+  result: {
+    postings: { in_process_at: string; status: string }[];
+    has_next: boolean;
+  };
+};
+
+/**
+ * Список отправлений (посылок) за период — отдельно FBO и FBS (у Ozon это
+ * разные фиды, как FBY/FBS у Яндекса). Даёт "сырые" заказы с датой размещения
+ * и статусом — то, чего нет в fetchOzonFinanceTransactions (там только уже
+ * оплаченные операции). Нужно вызывать оба schema ("fbo" и "fbs") и сложить
+ * результат, если нужны все продажи компании, а не одна схема доставки.
+ */
+export async function fetchOzonPostings(
+  dateFrom: string,
+  dateTo: string,
+  schema: "fbo" | "fbs"
+): Promise<OzonPostingRow[]> {
+  const rows: OzonPostingRow[] = [];
+  let offset = 0;
+  const limit = 1000;
+
+  for (;;) {
+    const res = await ozonPost<PostingListResponse>(`/v3/posting/${schema}/list`, {
+      filter: { since: dateFrom, to: dateTo },
+      offset,
+      limit,
+      with: { analytics_data: false, financial_data: false },
+    });
+
+    for (const p of res.result.postings) {
+      rows.push({ createdAt: p.in_process_at, status: p.status });
+    }
+
+    if (!res.result.has_next) break;
+    offset += limit;
+  }
+
+  return rows;
+}
+
 export type OzonClusterWarehouse = { warehouseId: number; warehouseName: string; clusterName: string };
 
 type ClusterListResponse = {

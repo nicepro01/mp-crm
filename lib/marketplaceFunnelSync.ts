@@ -1,0 +1,190 @@
+import { prisma } from "./prisma";
+import { getCurrentCompanyId } from "./tenantContext";
+import { fetchWbOrders } from "./wbApi";
+import { fetchOzonPostings } from "./ozonApi";
+import { fetchYandexGoodsRealizationBothCampaigns } from "./yandexMarketApi";
+
+// Те же значения, что и в app/api/unit-economics/sync-wb/route.ts — WB не
+// отдаёт сырые заказы старше ~30 дней (жёсткий обрыв API), а заказы младше
+// BUYOUT_LAG_DAYS ещё не имеют решённого исхода (выкупят/откажутся).
+export const ORDERS_WINDOW_DAYS = 30;
+export const BUYOUT_LAG_DAYS = 10;
+
+type DayBucket = { ordered: number; boughtOut: number; cancelled: number; provisional: boolean };
+
+async function upsertFunnelRow(params: {
+  marketplaceId: string;
+  granularity: "DAY" | "MONTH";
+  periodStart: Date;
+  orderedQty: number;
+  boughtOutQty: number;
+  cancelledQty: number;
+  isProvisional: boolean;
+}) {
+  await prisma.marketplaceDailyFunnel.upsert({
+    where: {
+      marketplaceId_granularity_periodStart: {
+        marketplaceId: params.marketplaceId,
+        granularity: params.granularity,
+        periodStart: params.periodStart,
+      },
+    },
+    create: { companyId: getCurrentCompanyId(), ...params },
+    update: {
+      orderedQty: params.orderedQty,
+      boughtOutQty: params.boughtOutQty,
+      cancelledQty: params.cancelledQty,
+      isProvisional: params.isProvisional,
+      syncedAt: new Date(),
+    },
+  });
+}
+
+async function upsertDayBuckets(marketplaceId: string, byDay: Map<string, DayBucket>) {
+  let daysUpserted = 0;
+  let provisionalDays = 0;
+  for (const [day, bucket] of byDay) {
+    await upsertFunnelRow({
+      marketplaceId,
+      granularity: "DAY",
+      periodStart: new Date(`${day}T00:00:00.000Z`),
+      orderedQty: bucket.ordered,
+      boughtOutQty: bucket.boughtOut,
+      cancelledQty: bucket.cancelled,
+      isProvisional: bucket.provisional,
+    });
+    daysUpserted++;
+    if (bucket.provisional) provisionalDays++;
+  }
+  return { daysUpserted, provisionalDays };
+}
+
+/**
+ * WB — реальная история ограничена ~30 днями (см. ORDERS_WINDOW_DAYS), дальше
+ * назад API физически не отдаёт. История в marketplace_daily_funnel копится
+ * ВПЕРЁД: при каждом вызове перезаписывается только текущее 30-дневное окно,
+ * более старые уже сохранённые дни не трогаются — так за недели регулярных
+ * синков накапливается больше реальной истории, чем можно получить одним
+ * запросом.
+ */
+export async function syncWbDailyFunnel() {
+  const marketplace = await prisma.marketplace.findFirst({ where: { code: "WB" } });
+  if (!marketplace) {
+    throw new Error("Площадка WB не найдена — сначала добавьте её на странице «Площадки»");
+  }
+
+  const dateFrom = new Date();
+  dateFrom.setDate(dateFrom.getDate() - ORDERS_WINDOW_DAYS);
+  const orders = await fetchWbOrders(dateFrom.toISOString().slice(0, 10));
+
+  const lagCutoff = new Date();
+  lagCutoff.setDate(lagCutoff.getDate() - BUYOUT_LAG_DAYS);
+
+  const byDay = new Map<string, DayBucket>();
+  for (const o of orders) {
+    const day = o.date.slice(0, 10);
+    let bucket = byDay.get(day);
+    if (!bucket) {
+      bucket = { ordered: 0, boughtOut: 0, cancelled: 0, provisional: false };
+      byDay.set(day, bucket);
+    }
+    bucket.ordered++;
+    // Внутри лага исход ещё не окончательный — считаем по текущему isCancel,
+    // но помечаем isProvisional, чтобы UI не выдавал это за финальный % выкупа.
+    if (new Date(o.date) > lagCutoff) bucket.provisional = true;
+    if (o.isCancel) bucket.cancelled++;
+    else bucket.boughtOut++;
+  }
+
+  return upsertDayBuckets(marketplace.id, byDay);
+}
+
+/**
+ * Ozon — новая функция (fetchOzonPostings), НЕ ПРОВЕРЕНА на реальном аккаунте
+ * (см. комментарий в lib/ozonApi.ts). windowDays — обычный параметр, не
+ * ограничение API (в отличие от WB), можно увеличивать по мере надобности.
+ */
+export async function syncOzonDailyFunnel(windowDays = 90) {
+  const marketplace = await prisma.marketplace.findFirst({ where: { code: "OZON" } });
+  if (!marketplace) {
+    throw new Error("Площадка Ozon не найдена — сначала добавьте её на странице «Площадки»");
+  }
+
+  const dateTo = new Date();
+  const dateFrom = new Date();
+  dateFrom.setDate(dateFrom.getDate() - windowDays);
+  const dateFromIso = dateFrom.toISOString();
+  const dateToIso = dateTo.toISOString();
+
+  // Последовательно, не Promise.all — параллельные тяжёлые запросы к API
+  // площадок в этом проекте уже приводили к обрыву соединения (см. комментарий
+  // в app/api/unit-economics/sync-wb/route.ts), придерживаемся того же
+  // осторожного паттерна и для нового Ozon-эндпоинта.
+  const fbo = await fetchOzonPostings(dateFromIso, dateToIso, "fbo");
+  const fbs = await fetchOzonPostings(dateFromIso, dateToIso, "fbs");
+  const postings = [...fbo, ...fbs];
+
+  const byDay = new Map<string, DayBucket>();
+  for (const p of postings) {
+    const day = p.createdAt.slice(0, 10);
+    let bucket = byDay.get(day);
+    if (!bucket) {
+      bucket = { ordered: 0, boughtOut: 0, cancelled: 0, provisional: false };
+      byDay.set(day, bucket);
+    }
+    bucket.ordered++;
+    if (p.status === "delivered") bucket.boughtOut++;
+    else if (p.status === "cancelled" || p.status === "returned") bucket.cancelled++;
+    else bucket.provisional = true; // ещё в процессе (awaiting_deliver и т.п.)
+  }
+
+  return upsertDayBuckets(marketplace.id, byDay);
+}
+
+/**
+ * Яндекс.Маркет — только помесячная гранулярность (нет дневного отчёта с
+ * таким разрезом), переиспользует существующий goods-realization отчёт
+ * (тот же, что и в юнит-экономике). orderedQty здесь = все уже РЕШЁННЫЕ
+ * заказы (delivered+unredeemed+returned) — в отличие от WB/Ozon, у Яндекса
+ * нет отдельного сигнала "заказано, но исход ещё не известен".
+ */
+export async function syncYandexMonthlyFunnel(month: number, year: number) {
+  const marketplace = await prisma.marketplace.findFirst({ where: { code: "YANDEX_MARKET" } });
+  if (!marketplace) {
+    throw new Error("Площадка Яндекс.Маркет не найдена — сначала добавьте её на странице «Площадки»");
+  }
+
+  const realization = await fetchYandexGoodsRealizationBothCampaigns(month, year);
+  const sum = (rows: { qty: number }[]) => rows.reduce((acc, r) => acc + r.qty, 0);
+
+  const boughtOutQty = sum(realization.delivered);
+  const cancelledQty = sum(realization.unredeemed) + sum(realization.returned);
+
+  await upsertFunnelRow({
+    marketplaceId: marketplace.id,
+    granularity: "MONTH",
+    periodStart: new Date(Date.UTC(year, month - 1, 1)),
+    orderedQty: boughtOutQty + cancelledQty,
+    boughtOutQty,
+    cancelledQty,
+    isProvisional: false,
+  });
+}
+
+/**
+ * Бэкфилл по образцу syncSeasonalityFromYandexMarketBackfill (см.
+ * lib/seasonalitySync.ts) — monthsBack=1 это последний завершённый месяц,
+ * каждый следующий на месяц раньше. ~2-2.5 мин на месяц (рейт-лимит внутри
+ * fetchYandexGoodsRealizationBothCampaigns) — на Vercel Hobby (лимит 300с на
+ * функцию) вызывать с monthsBack=1 за раз, повторяя кнопку для след. месяца.
+ */
+export async function syncYandexFunnelBackfill(monthsBack: number) {
+  const now = new Date();
+  let monthsSynced = 0;
+  for (let i = 1; i <= monthsBack; i++) {
+    const target = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    await syncYandexMonthlyFunnel(target.getUTCMonth() + 1, target.getUTCFullYear());
+    monthsSynced++;
+  }
+  return { monthsSynced };
+}

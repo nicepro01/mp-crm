@@ -9,6 +9,7 @@ import TopMoversWidget, { MoverRow, MoverScope } from "./TopMoversWidget";
 import AttentionWidget, { AttentionScope } from "./AttentionWidget";
 import CreateOrderSection from "./CreateOrderSection";
 import SingleMetricChartWidget, { SingleMetricScope } from "./SingleMetricChartWidget";
+import FunnelChartWidget from "./FunnelChartWidget";
 import { MiniBarChart, ChartBar } from "./MiniChart";
 import PriorityFilterTable from "./PriorityFilterTable";
 import RecommendationsFilterList from "./RecommendationsFilterList";
@@ -1014,6 +1015,12 @@ async function AnalyticsPageContent() {
             </div>
           </>
         ),
+    });
+
+    subTabs.push({
+      key: "funnel-charts",
+      label: "Графики",
+      content: <FunnelChartWidget code={code} marketplaceName={marketplaceName} />,
     });
 
     return {

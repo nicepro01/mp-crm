@@ -53,6 +53,7 @@ model Company {
   taskColumns               TaskColumn[]
   tasks                     Task[]
   taskAttachments           TaskAttachment[]
+  marketplaceDailyFunnel    MarketplaceDailyFunnel[]
 
   @@map("companies")
 }
@@ -419,6 +420,7 @@ model Marketplace {
   warehouseAnalytics ProductWarehouseAnalytics[]
   returnClaims       ReturnClaim[]
   monthlySales       ProductMonthlySales[]
+  dailyFunnel        MarketplaceDailyFunnel[]
 
   @@unique([companyId, code])
   @@map("marketplaces")
@@ -778,6 +780,45 @@ model ProductMonthlySales {
   @@index([productId])
   @@index([companyId])
   @@map("product_monthly_sales")
+}
+
+enum FunnelGranularity {
+  DAY
+  MONTH
+}
+
+// Уровень компания+площадка+период (НЕ по товару — агрегат по всей площадке
+// целиком) — сколько заказано против сколько реально выкуплено/доставлено,
+// для графика в Аналитике (см. app/analytics/FunnelChartWidget.tsx).
+// granularity=MONTH используется только Яндекс.Маркетом (periodStart — 1-е
+// число месяца) — у отчёта "Реализация товаров" нет дневной разбивки, в
+// отличие от WB/Ozon, которые пишут granularity=DAY, periodStart — сама дата.
+model MarketplaceDailyFunnel {
+  id        String  @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  marketplaceId String
+  marketplace   Marketplace @relation(fields: [marketplaceId], references: [id])
+
+  granularity FunnelGranularity
+  periodStart DateTime
+
+  orderedQty   Int // всего заказов за период, включая ещё не решённые
+  boughtOutQty Int // выкуплено/доставлено — реально оплаченная часть
+  cancelledQty Int // отменено/невыкуплено/возврат
+
+  // Заказы младше лага решения (см. BUYOUT_LAG_DAYS в lib/marketplaceFunnelSync.ts)
+  // ещё не имеют известного исхода — boughtOutQty/cancelledQty для таких
+  // периодов заведомо неполные, UI должен показывать это явно, а не как 0%.
+  isProvisional Boolean @default(false)
+
+  syncedAt DateTime @default(now())
+
+  @@unique([marketplaceId, granularity, periodStart])
+  @@index([companyId])
+  @@index([marketplaceId, periodStart])
+  @@map("marketplace_daily_funnel")
 }
 
 // Заявки на возврат от покупателей (WB: /api/v1/claims). productId нет,
