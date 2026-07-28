@@ -258,11 +258,10 @@ export async function fetchOzonFinanceTransactions(
   return rows;
 }
 
-// НЕ ПРОВЕРЕНО на реальном аккаунте Ozon — из среды разработки нет сети до
-// api-seller.ozon.ru, поля/статусы сверены только по документации. При первом
-// боевом запуске (см. lib/marketplaceFunnelSync.ts) нужно проверить, что
-// названия полей (in_process_at, status) и офсетная пагинация (has_next)
-// действительно совпадают с реальным ответом — и поправить при расхождении.
+// Проверено на реальном аккаунте: limit строго (0, 100] — запрос с 1000
+// падает с "Request validation error: invalid PostingFboListRequest.Limit".
+// Названия полей (in_process_at, status, has_next) пока не перепроверены
+// дальше этой ошибки — если появятся новые расхождения, править здесь же.
 export type OzonPostingRow = {
   createdAt: string; // in_process_at — когда посылка создана/размещена
   status: string; // "delivered" | "cancelled" | "awaiting_deliver" | ... — сырой статус Ozon
@@ -289,7 +288,7 @@ export async function fetchOzonPostings(
 ): Promise<OzonPostingRow[]> {
   const rows: OzonPostingRow[] = [];
   let offset = 0;
-  const limit = 1000;
+  const limit = 100;
 
   for (;;) {
     const res = await ozonPost<PostingListResponse>(`/v3/posting/${schema}/list`, {
