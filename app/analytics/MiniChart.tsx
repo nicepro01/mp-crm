@@ -27,11 +27,17 @@ export function MiniBarChart({
   color,
   height = 240,
   valueSuffix = "",
+  showSegmentValues = false,
 }: {
   data: ChartBar[];
   color: string;
   height?: number;
   valueSuffix?: string;
+  // Число прямо на каждом сегменте (не только в тултипе при наведении) —
+  // нужно там, где сегментов немного и по ним важно видеть точные цифры
+  // без наведения (см. FunnelChartWidget). Для узких сегментов (< minHeight)
+  // число не рисуется — иначе на паре пикселей текст просто нечитаем.
+  showSegmentValues?: boolean;
 }) {
   if (data.length === 0) {
     return <p className="muted">Нет данных за период.</p>;
@@ -103,21 +109,38 @@ export function MiniBarChart({
                 // масштабом (scale), что и общий столбик, — сумма высот
                 // сегментов совпадает с высотой обычного бара для того же total.
                 let cursor = zeroY;
+                const minLabelHeight = 12; // меньше — цифра физически не влезает, не рисуем
                 return segments.map((s) => {
                   const segHeight = Math.max(0, Math.abs(s.value) * scale);
                   const segY = d.value >= 0 ? cursor - segHeight : cursor;
                   cursor = d.value >= 0 ? segY : cursor + segHeight;
+                  const segTooltip = `${d.label} · ${s.label}: ${formatValue(s.value, valueSuffix)}`;
                   return (
-                    <rect
-                      key={s.code}
-                      x={x}
-                      y={segY}
-                      width={barWidth}
-                      height={segHeight}
-                      fill={s.color}
-                      // @ts-expect-error -- title как SVG-атрибут не в типах React для <rect>
-                      title={`${d.label} · ${s.label}: ${formatValue(s.value, valueSuffix)}`}
-                    />
+                    <g key={s.code}>
+                      <rect
+                        x={x}
+                        y={segY}
+                        width={barWidth}
+                        height={segHeight}
+                        fill={s.color}
+                        // @ts-expect-error -- title как SVG-атрибут не в типах React для <rect>
+                        title={segTooltip}
+                      />
+                      {showSegmentValues && segHeight >= minLabelHeight && (
+                        <text
+                          x={centerX}
+                          y={segY + segHeight / 2 + 3}
+                          textAnchor="middle"
+                          fontSize={9}
+                          fontWeight={600}
+                          fill="#fff"
+                          // @ts-expect-error -- см. комментарий выше про <rect>
+                          title={segTooltip}
+                        >
+                          {Math.round(s.value)}
+                        </text>
+                      )}
+                    </g>
                   );
                 });
               })()
