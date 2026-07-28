@@ -292,18 +292,28 @@ export async function fetchOzonPostings(
   const limit = 100;
 
   for (;;) {
+    // financial_data:true — включено ПОСЛЕ реальной ошибки: с false цена
+    // ушла в NaN (products[].price внутри базового posting её не содержит,
+    // судя по всему это gated именно за этим флагом). Ставим true — если
+    // окажется, что цена лежит где-то ещё, поправить extraction ниже.
     const raw = await ozonPost<any>(`/v3/posting/${schema}/list`, {
       filter: { since: dateFrom, to: dateTo },
       cursor,
       limit,
-      with: { analytics_data: false, financial_data: false },
+      with: { analytics_data: false, financial_data: true },
     });
 
     // Подтверждённая форма — postings/has_next/cursor в корне ответа; на
     // случай, если FBS (в отличие от уже проверенного FBO) всё же вернёт
     // старую форму {result: {...}}, оставляем и этот путь тоже.
     const postings:
-      | { in_process_at?: string; created_at?: string; status: string; products?: { price?: string | number; quantity?: number }[] }[]
+      | {
+          in_process_at?: string;
+          created_at?: string;
+          status: string;
+          products?: { price?: string | number; quantity?: number }[];
+          financial_data?: { products?: { price?: string | number; quantity?: number }[] };
+        }[]
       | undefined = Array.isArray(raw?.postings)
       ? raw.postings
       : Array.isArray(raw?.result)
@@ -316,10 +326,18 @@ export async function fetchOzonPostings(
     }
 
     for (const p of postings) {
-      const priceRub = (p.products ?? []).reduce(
-        (sum, prod) => sum + Number(prod.price ?? 0) * (prod.quantity ?? 1),
-        0
-      );
+      // Пробуем financial_data.products[] (обычно именно там у Ozon цена),
+      // с откатом на products[] верхнего уровня. Number.isFinite — не
+      // decoративный defensive-код, а единственное, что не даёт NaN
+      // долететь до Prisma (там NaN в Decimal-поле ломает upsert целиком с
+      // непонятной ошибкой про "Argument company is missing" вместо
+      // внятной жалобы на конкретное поле — реальный инцидент, не гипотеза).
+      const items = p.financial_data?.products ?? p.products ?? [];
+      const priceRub = items.reduce((sum, prod) => {
+        const price = Number(prod?.price);
+        const qty = Number(prod?.quantity) || 1;
+        return sum + (Number.isFinite(price) ? price * qty : 0);
+      }, 0);
       rows.push({ createdAt: p.in_process_at ?? p.created_at ?? "", status: p.status, priceRub });
     }
 

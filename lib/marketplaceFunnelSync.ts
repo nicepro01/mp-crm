@@ -36,6 +36,19 @@ async function upsertFunnelRow(params: {
   cancelledSumRub: number;
   isProvisional: boolean;
 }) {
+  // NaN в Decimal-поле уже один раз уронил этот upsert целиком с непонятной
+  // ошибкой про "Argument company is missing" вместо жалобы на конкретное
+  // поле (реальный инцидент с ценой Ozon, см. lib/ozonApi.ts) — эта же беда
+  // может повториться с любым другим неподтверждённым полем цены (WB),
+  // поэтому подчищаем NaN здесь в одном месте, а не в каждом источнике отдельно.
+  const safe = (n: number) => (Number.isFinite(n) ? n : 0);
+  params = {
+    ...params,
+    orderedSumRub: safe(params.orderedSumRub),
+    boughtOutSumRub: safe(params.boughtOutSumRub),
+    cancelledSumRub: safe(params.cancelledSumRub),
+  };
+
   await prisma.marketplaceDailyFunnel.upsert({
     where: {
       marketplaceId_granularity_periodStart: {
