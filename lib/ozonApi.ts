@@ -268,6 +268,11 @@ export async function fetchOzonFinanceTransactions(
 export type OzonPostingRow = {
   createdAt: string;
   status: string;
+  // Сумма посылки — сложение price*quantity по products[] (стандартное
+  // место цены у Ozon постингов, price приходит строкой). НЕ перепроверено
+  // на реальном ответе (financial_data отключён — цена в products[] должна
+  // быть доступна и без него, но это предположение по документации, не факт).
+  priceRub: number;
 };
 
 /**
@@ -297,9 +302,9 @@ export async function fetchOzonPostings(
     // Подтверждённая форма — postings/has_next/cursor в корне ответа; на
     // случай, если FBS (в отличие от уже проверенного FBO) всё же вернёт
     // старую форму {result: {...}}, оставляем и этот путь тоже.
-    const postings: { in_process_at?: string; created_at?: string; status: string }[] | undefined = Array.isArray(
-      raw?.postings
-    )
+    const postings:
+      | { in_process_at?: string; created_at?: string; status: string; products?: { price?: string | number; quantity?: number }[] }[]
+      | undefined = Array.isArray(raw?.postings)
       ? raw.postings
       : Array.isArray(raw?.result)
         ? raw.result
@@ -311,7 +316,11 @@ export async function fetchOzonPostings(
     }
 
     for (const p of postings) {
-      rows.push({ createdAt: p.in_process_at ?? p.created_at ?? "", status: p.status });
+      const priceRub = (p.products ?? []).reduce(
+        (sum, prod) => sum + Number(prod.price ?? 0) * (prod.quantity ?? 1),
+        0
+      );
+      rows.push({ createdAt: p.in_process_at ?? p.created_at ?? "", status: p.status, priceRub });
     }
 
     const hasNext: boolean = raw?.has_next ?? raw?.result?.has_next ?? false;

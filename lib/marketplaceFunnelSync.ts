@@ -10,7 +10,19 @@ import { fetchYandexGoodsRealizationBothCampaigns } from "./yandexMarketApi";
 export const ORDERS_WINDOW_DAYS = 30;
 export const BUYOUT_LAG_DAYS = 10;
 
-type DayBucket = { ordered: number; boughtOut: number; cancelled: number; provisional: boolean };
+type DayBucket = {
+  ordered: number;
+  boughtOut: number;
+  cancelled: number;
+  orderedSum: number;
+  boughtOutSum: number;
+  cancelledSum: number;
+  provisional: boolean;
+};
+
+function emptyBucket(): DayBucket {
+  return { ordered: 0, boughtOut: 0, cancelled: 0, orderedSum: 0, boughtOutSum: 0, cancelledSum: 0, provisional: false };
+}
 
 async function upsertFunnelRow(params: {
   marketplaceId: string;
@@ -19,6 +31,9 @@ async function upsertFunnelRow(params: {
   orderedQty: number;
   boughtOutQty: number;
   cancelledQty: number;
+  orderedSumRub: number;
+  boughtOutSumRub: number;
+  cancelledSumRub: number;
   isProvisional: boolean;
 }) {
   await prisma.marketplaceDailyFunnel.upsert({
@@ -34,6 +49,9 @@ async function upsertFunnelRow(params: {
       orderedQty: params.orderedQty,
       boughtOutQty: params.boughtOutQty,
       cancelledQty: params.cancelledQty,
+      orderedSumRub: params.orderedSumRub,
+      boughtOutSumRub: params.boughtOutSumRub,
+      cancelledSumRub: params.cancelledSumRub,
       isProvisional: params.isProvisional,
       syncedAt: new Date(),
     },
@@ -51,6 +69,9 @@ async function upsertDayBuckets(marketplaceId: string, byDay: Map<string, DayBuc
       orderedQty: bucket.ordered,
       boughtOutQty: bucket.boughtOut,
       cancelledQty: bucket.cancelled,
+      orderedSumRub: bucket.orderedSum,
+      boughtOutSumRub: bucket.boughtOutSum,
+      cancelledSumRub: bucket.cancelledSum,
       isProvisional: bucket.provisional,
     });
     daysUpserted++;
@@ -85,24 +106,29 @@ export async function syncWbDailyFunnel() {
     const day = o.date.slice(0, 10);
     let bucket = byDay.get(day);
     if (!bucket) {
-      bucket = { ordered: 0, boughtOut: 0, cancelled: 0, provisional: false };
+      bucket = emptyBucket();
       byDay.set(day, bucket);
     }
     bucket.ordered++;
+    bucket.orderedSum += o.priceWithDisc;
     // Внутри лага исход ещё не окончательный — считаем по текущему isCancel,
     // но помечаем isProvisional, чтобы UI не выдавал это за финальный % выкупа.
     if (new Date(o.date) > lagCutoff) bucket.provisional = true;
-    if (o.isCancel) bucket.cancelled++;
-    else bucket.boughtOut++;
+    if (o.isCancel) {
+      bucket.cancelled++;
+      bucket.cancelledSum += o.priceWithDisc;
+    } else {
+      bucket.boughtOut++;
+      bucket.boughtOutSum += o.priceWithDisc;
+    }
   }
 
   return upsertDayBuckets(marketplace.id, byDay);
 }
 
 /**
- * Ozon — новая функция (fetchOzonPostings), НЕ ПРОВЕРЕНА на реальном аккаунте
- * (см. комментарий в lib/ozonApi.ts). windowDays — обычный параметр, не
- * ограничение API (в отличие от WB), можно увеличивать по мере надобности.
+ * Ozon — новая функция (fetchOzonPostings), проверена частично на реальном
+ * аккаунте (пагинация и корневые поля подтверждены), сумма (priceRub) — нет.
  */
 export async function syncOzonDailyFunnel(windowDays = 90) {
   const marketplace = await prisma.marketplace.findFirst({ where: { code: "OZON" } });
@@ -129,13 +155,20 @@ export async function syncOzonDailyFunnel(windowDays = 90) {
     const day = p.createdAt.slice(0, 10);
     let bucket = byDay.get(day);
     if (!bucket) {
-      bucket = { ordered: 0, boughtOut: 0, cancelled: 0, provisional: false };
+      bucket = emptyBucket();
       byDay.set(day, bucket);
     }
     bucket.ordered++;
-    if (p.status === "delivered") bucket.boughtOut++;
-    else if (p.status === "cancelled" || p.status === "returned") bucket.cancelled++;
-    else bucket.provisional = true; // ещё в процессе (awaiting_deliver и т.п.)
+    bucket.orderedSum += p.priceRub;
+    if (p.status === "delivered") {
+      bucket.boughtOut++;
+      bucket.boughtOutSum += p.priceRub;
+    } else if (p.status === "cancelled" || p.status === "returned") {
+      bucket.cancelled++;
+      bucket.cancelledSum += p.priceRub;
+    } else {
+      bucket.provisional = true; // ещё в процессе (awaiting_deliver и т.п.)
+    }
   }
 
   return upsertDayBuckets(marketplace.id, byDay);
@@ -144,9 +177,9 @@ export async function syncOzonDailyFunnel(windowDays = 90) {
 /**
  * Яндекс.Маркет — только помесячная гранулярность (нет дневного отчёта с
  * таким разрезом), переиспользует существующий goods-realization отчёт
- * (тот же, что и в юнит-экономике). orderedQty здесь = все уже РЕШЁННЫЕ
- * заказы (delivered+unredeemed+returned) — в отличие от WB/Ozon, у Яндекса
- * нет отдельного сигнала "заказано, но исход ещё не известен".
+ * (тот же, что и в юнит-экономике, включая уже готовый revenueRub на строку).
+ * orderedQty здесь = все уже РЕШЁННЫЕ заказы (delivered+unredeemed+returned) —
+ * в отличие от WB/Ozon, у Яндекса нет сигнала "заказано, исход не известен".
  */
 export async function syncYandexMonthlyFunnel(month: number, year: number) {
   const marketplace = await prisma.marketplace.findFirst({ where: { code: "YANDEX_MARKET" } });
@@ -155,10 +188,13 @@ export async function syncYandexMonthlyFunnel(month: number, year: number) {
   }
 
   const realization = await fetchYandexGoodsRealizationBothCampaigns(month, year);
-  const sum = (rows: { qty: number }[]) => rows.reduce((acc, r) => acc + r.qty, 0);
+  const sumQty = (rows: { qty: number }[]) => rows.reduce((acc, r) => acc + r.qty, 0);
+  const sumRevenue = (rows: { revenueRub: number }[]) => rows.reduce((acc, r) => acc + r.revenueRub, 0);
 
-  const boughtOutQty = sum(realization.delivered);
-  const cancelledQty = sum(realization.unredeemed) + sum(realization.returned);
+  const boughtOutQty = sumQty(realization.delivered);
+  const cancelledQty = sumQty(realization.unredeemed) + sumQty(realization.returned);
+  const boughtOutSumRub = sumRevenue(realization.delivered);
+  const cancelledSumRub = sumRevenue(realization.unredeemed) + sumRevenue(realization.returned);
 
   await upsertFunnelRow({
     marketplaceId: marketplace.id,
@@ -167,6 +203,9 @@ export async function syncYandexMonthlyFunnel(month: number, year: number) {
     orderedQty: boughtOutQty + cancelledQty,
     boughtOutQty,
     cancelledQty,
+    orderedSumRub: boughtOutSumRub + cancelledSumRub,
+    boughtOutSumRub,
+    cancelledSumRub,
     isProvisional: false,
   });
 }

@@ -205,6 +205,12 @@ export type WbOrderRow = {
   isCancel: boolean;
   cancelDate: string; // "0001-01-01T00:00:00", если не отменялся
   warehouseName: string; // склад отгрузки заказа — реальный физический склад WB
+  // Цена заказа после скидки продавца, до СПП и до комиссии WB — то же поле,
+  // что и в /api/v1/supplier/sales (см. WbSaleEntry.finishedPrice), НЕ
+  // перепроверено на реальном ответе именно этого эндпоинта (supplier/orders,
+  // а не supplier/sales) — если сумма выйдет явно неправдоподобной, сверить
+  // с реальным JSON и поправить имя поля.
+  priceWithDisc: number;
 };
 
 /**

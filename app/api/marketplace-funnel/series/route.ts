@@ -5,6 +5,17 @@ import { runWithTenant } from "@/lib/tenantContext";
 
 const DAY_RANGES = new Set([7, 14, 30, 90]);
 
+type Row = {
+  periodStart: string;
+  orderedQty: number;
+  boughtOutQty: number;
+  cancelledQty: number;
+  orderedSumRub: number;
+  boughtOutSumRub: number;
+  cancelledSumRub: number;
+  isProvisional: boolean;
+};
+
 export async function GET(req: NextRequest) {
   const session = await getApiTenantSession();
   if (!session) return unauthorizedResponse();
@@ -40,10 +51,7 @@ async function GETContent(req: NextRequest) {
       }),
     ]);
 
-    const byMonth = new Map<
-      string,
-      { periodStart: string; orderedQty: number; boughtOutQty: number; cancelledQty: number; isProvisional: boolean }
-    >();
+    const byMonth = new Map<string, Row>();
     for (const r of monthRows) {
       const key = r.periodStart.toISOString().slice(0, 7);
       byMonth.set(key, {
@@ -51,6 +59,9 @@ async function GETContent(req: NextRequest) {
         orderedQty: r.orderedQty,
         boughtOutQty: r.boughtOutQty,
         cancelledQty: r.cancelledQty,
+        orderedSumRub: Number(r.orderedSumRub),
+        boughtOutSumRub: Number(r.boughtOutSumRub),
+        cancelledSumRub: Number(r.cancelledSumRub),
         isProvisional: r.isProvisional,
       });
     }
@@ -61,6 +72,9 @@ async function GETContent(req: NextRequest) {
         existing.orderedQty += r.orderedQty;
         existing.boughtOutQty += r.boughtOutQty;
         existing.cancelledQty += r.cancelledQty;
+        existing.orderedSumRub += Number(r.orderedSumRub);
+        existing.boughtOutSumRub += Number(r.boughtOutSumRub);
+        existing.cancelledSumRub += Number(r.cancelledSumRub);
         existing.isProvisional = existing.isProvisional || r.isProvisional;
       } else {
         byMonth.set(key, {
@@ -68,6 +82,9 @@ async function GETContent(req: NextRequest) {
           orderedQty: r.orderedQty,
           boughtOutQty: r.boughtOutQty,
           cancelledQty: r.cancelledQty,
+          orderedSumRub: Number(r.orderedSumRub),
+          boughtOutSumRub: Number(r.boughtOutSumRub),
+          cancelledSumRub: Number(r.cancelledSumRub),
           isProvisional: r.isProvisional,
         });
       }
@@ -95,12 +112,17 @@ async function GETContent(req: NextRequest) {
     granularity: "DAY",
     requestedRange: range,
     availableDays: rows.length,
-    rows: rows.map((r) => ({
-      periodStart: r.periodStart.toISOString(),
-      orderedQty: r.orderedQty,
-      boughtOutQty: r.boughtOutQty,
-      cancelledQty: r.cancelledQty,
-      isProvisional: r.isProvisional,
-    })),
+    rows: rows.map(
+      (r): Row => ({
+        periodStart: r.periodStart.toISOString(),
+        orderedQty: r.orderedQty,
+        boughtOutQty: r.boughtOutQty,
+        cancelledQty: r.cancelledQty,
+        orderedSumRub: Number(r.orderedSumRub),
+        boughtOutSumRub: Number(r.boughtOutSumRub),
+        cancelledSumRub: Number(r.cancelledSumRub),
+        isProvisional: r.isProvisional,
+      })
+    ),
   });
 }

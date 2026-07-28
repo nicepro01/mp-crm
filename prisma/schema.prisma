@@ -808,6 +808,14 @@ model MarketplaceDailyFunnel {
   boughtOutQty Int // выкуплено/доставлено — реально оплаченная часть
   cancelledQty Int // отменено/невыкуплено/возврат
 
+  // То же самое, но в рублях (цена заказа/выкупа/отмены) — для WB/Ozon это
+  // цена ДО комиссии площадки (не то же самое, что чистая юнит-экономика,
+  // см. модель UnitEconomics), для Яндекса — revenueRub из отчёта
+  // "Реализация товаров", уже используемого в syncYandexMonthlyFunnel.
+  orderedSumRub   Decimal @default(0) @db.Decimal(12, 2)
+  boughtOutSumRub Decimal @default(0) @db.Decimal(12, 2)
+  cancelledSumRub Decimal @default(0) @db.Decimal(12, 2)
+
   // Заказы младше лага решения (см. BUYOUT_LAG_DAYS в lib/marketplaceFunnelSync.ts)
   // ещё не имеют известного исхода — boughtOutQty/cancelledQty для таких
   // периодов заведомо неполные, UI должен показывать это явно, а не как 0%.
