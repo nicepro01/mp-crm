@@ -260,18 +260,15 @@ export async function fetchOzonFinanceTransactions(
 
 // Проверено на реальном аккаунте: limit строго (0, 100] — запрос с 1000
 // падает с "Request validation error: invalid PostingFboListRequest.Limit".
-// Названия полей (in_process_at, status, has_next) пока не перепроверены
-// дальше этой ошибки — если появятся новые расхождения, править здесь же.
+// Форма самого ответа (result — массив напрямую или {postings, has_next}?,
+// поле даты — in_process_at или created_at?) пока НЕ подтверждена реальным
+// вызовом — вместо жёсткого типа разбираем defensively обе известные формы
+// и, если не подошла ни одна, бросаем ошибку с перечнем реальных ключей
+// верхнего уровня — так следующий фейл сразу скажет, что чинить, вместо
+// молчаливого "Cannot read properties of undefined".
 export type OzonPostingRow = {
-  createdAt: string; // in_process_at — когда посылка создана/размещена
-  status: string; // "delivered" | "cancelled" | "awaiting_deliver" | ... — сырой статус Ozon
-};
-
-type PostingListResponse = {
-  result: {
-    postings: { in_process_at: string; status: string }[];
-    has_next: boolean;
-  };
+  createdAt: string;
+  status: string;
 };
 
 /**
@@ -291,18 +288,33 @@ export async function fetchOzonPostings(
   const limit = 100;
 
   for (;;) {
-    const res = await ozonPost<PostingListResponse>(`/v3/posting/${schema}/list`, {
+    const raw = await ozonPost<any>(`/v3/posting/${schema}/list`, {
       filter: { since: dateFrom, to: dateTo },
       offset,
       limit,
       with: { analytics_data: false, financial_data: false },
     });
 
-    for (const p of res.result.postings) {
-      rows.push({ createdAt: p.in_process_at, status: p.status });
+    const postings: { in_process_at?: string; created_at?: string; status: string }[] | undefined = Array.isArray(
+      raw?.result
+    )
+      ? raw.result
+      : raw?.result?.postings;
+
+    if (!postings) {
+      const topKeys = Object.keys(raw ?? {}).join(", ") || "(пусто)";
+      const resultKeys = Object.keys(raw?.result ?? {}).join(", ") || "(пусто)";
+      throw new Error(
+        `Неожиданный формат ответа /v3/posting/${schema}/list — ключи верхнего уровня: [${topKeys}], ключи result: [${resultKeys}]`
+      );
     }
 
-    if (!res.result.has_next) break;
+    for (const p of postings) {
+      rows.push({ createdAt: p.in_process_at ?? p.created_at ?? "", status: p.status });
+    }
+
+    const hasNext = raw?.result?.has_next ?? raw?.has_next ?? postings.length === limit;
+    if (!hasNext) break;
     offset += limit;
   }
 
