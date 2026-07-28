@@ -258,14 +258,13 @@ export async function fetchOzonFinanceTransactions(
   return rows;
 }
 
-// Проверено на реальном аккаунте: limit строго (0, 100] — запрос с 1000
-// падает с "Request validation error: invalid PostingFboListRequest.Limit".
-// Форма самого ответа (result — массив напрямую или {postings, has_next}?,
-// поле даты — in_process_at или created_at?) пока НЕ подтверждена реальным
-// вызовом — вместо жёсткого типа разбираем defensively обе известные формы
-// и, если не подошла ни одна, бросаем ошибку с перечнем реальных ключей
-// верхнего уровня — так следующий фейл сразу скажет, что чинить, вместо
-// молчаливого "Cannot read properties of undefined".
+// Проверено на реальном аккаунте: limit строго (0, 100]; сама форма ответа —
+// НЕ {result: {...}} (как у fetchOzonFinanceTransactions), поля has_next/
+// cursor/postings лежат прямо в корне. Курсорная пагинация (cursor), не
+// offset — хотя offset в запросе не вызывает ошибку, продолжение через
+// cursor надёжнее (стандартный паттерн Ozon v3). Форма самого элемента
+// postings[] (in_process_at/created_at/status) пока не перепроверена дальше
+// первой страницы — если появится новое расхождение, поправить здесь же.
 export type OzonPostingRow = {
   createdAt: string;
   status: string;
@@ -284,38 +283,41 @@ export async function fetchOzonPostings(
   schema: "fbo" | "fbs"
 ): Promise<OzonPostingRow[]> {
   const rows: OzonPostingRow[] = [];
-  let offset = 0;
+  let cursor = "";
   const limit = 100;
 
   for (;;) {
     const raw = await ozonPost<any>(`/v3/posting/${schema}/list`, {
       filter: { since: dateFrom, to: dateTo },
-      offset,
+      cursor,
       limit,
       with: { analytics_data: false, financial_data: false },
     });
 
+    // Подтверждённая форма — postings/has_next/cursor в корне ответа; на
+    // случай, если FBS (в отличие от уже проверенного FBO) всё же вернёт
+    // старую форму {result: {...}}, оставляем и этот путь тоже.
     const postings: { in_process_at?: string; created_at?: string; status: string }[] | undefined = Array.isArray(
-      raw?.result
+      raw?.postings
     )
-      ? raw.result
-      : raw?.result?.postings;
+      ? raw.postings
+      : Array.isArray(raw?.result)
+        ? raw.result
+        : raw?.result?.postings;
 
     if (!postings) {
       const topKeys = Object.keys(raw ?? {}).join(", ") || "(пусто)";
-      const resultKeys = Object.keys(raw?.result ?? {}).join(", ") || "(пусто)";
-      throw new Error(
-        `Неожиданный формат ответа /v3/posting/${schema}/list — ключи верхнего уровня: [${topKeys}], ключи result: [${resultKeys}]`
-      );
+      throw new Error(`Неожиданный формат ответа /v3/posting/${schema}/list — ключи верхнего уровня: [${topKeys}]`);
     }
 
     for (const p of postings) {
       rows.push({ createdAt: p.in_process_at ?? p.created_at ?? "", status: p.status });
     }
 
-    const hasNext = raw?.result?.has_next ?? raw?.has_next ?? postings.length === limit;
-    if (!hasNext) break;
-    offset += limit;
+    const hasNext: boolean = raw?.has_next ?? raw?.result?.has_next ?? false;
+    const nextCursor: string = raw?.cursor ?? raw?.result?.cursor ?? "";
+    if (!hasNext || !nextCursor) break;
+    cursor = nextCursor;
   }
 
   return rows;
