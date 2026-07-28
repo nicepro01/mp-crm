@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import ThemeToggle from "./ThemeToggle";
+import RefreshAllButton from "./RefreshAllButton";
 
 export const metadata: Metadata = {
   title: "MP-CRM",
@@ -45,6 +46,7 @@ export default function RootLayout({
           <a href="/tasks">Задачи</a>
           <a href="/settings/integrations">Интеграции</a>
           <span className="nav-spacer" />
+          <RefreshAllButton />
           <ThemeToggle />
         </nav>
         <main>{children}</main>

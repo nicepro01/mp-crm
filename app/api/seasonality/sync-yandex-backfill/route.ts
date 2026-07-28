@@ -1,4 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getApiTenantSession, unauthorizedResponse } from "@/lib/session";
+import { runWithTenant } from "@/lib/tenantContext";
 import { syncSeasonalityFromYandexMarketBackfill } from "@/lib/seasonalitySync";
 
 // Может идти десятки минут (рейт-лимит Яндекса — 1 запрос генерации отчёта
@@ -10,7 +12,16 @@ import { syncSeasonalityFromYandexMarketBackfill } from "@/lib/seasonalitySync";
 // нажимая кнопку повторно для каждого следующего месяца.
 export const maxDuration = 300;
 
-export async function POST(req: Request) {
+// Раньше без сессионной обёртки — вызов вне runWithTenant() падал с "Нет
+// контекста компании" (см. lib/tenantContext.ts). Тот же паттерн, что и у
+// остальных sync-роутов.
+export async function POST(req: NextRequest) {
+  const session = await getApiTenantSession();
+  if (!session) return unauthorizedResponse();
+  return runWithTenant(session, () => POSTContent(req));
+}
+
+async function POSTContent(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const monthsBack = Math.min(Math.max(Number(body?.monthsBack) || 3, 1), 12);
 

@@ -1,0 +1,7 @@
+{
+  "crons": [
+    { "path": "/api/cron/wb", "schedule": "0 21 * * *" },
+    { "path": "/api/cron/ozon", "schedule": "0 21 * * *" },
+    { "path": "/api/cron/yandex", "schedule": "0 21 * * *" }
+  ]
+}

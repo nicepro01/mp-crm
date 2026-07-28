@@ -16,6 +16,12 @@ const PUBLIC_PATHS = new Set([
   "/api/forgot-password",
   "/reset-password",
   "/api/reset-password",
+  // Vercel Cron вызывает эти пути без сессии (вообще без cookie) — свою
+  // защиту делают сами роуты через заголовок Authorization: Bearer
+  // <CRON_SECRET> (см. app/api/cron/*/route.ts), а не через логин.
+  "/api/cron/wb",
+  "/api/cron/ozon",
+  "/api/cron/yandex",
 ]);
 
 // Без сессии: публичные страницы/API пропускаем как есть, остальные API —

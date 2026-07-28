@@ -23,11 +23,11 @@ export default function ThemeToggle() {
   return (
     <button
       type="button"
-      className="theme-toggle"
+      className="nav-icon-btn"
       onClick={toggle}
-      title="Переключить тему"
+      title={theme === "dark" ? "Переключить на светлую тему" : "Переключить на тёмную тему"}
     >
-      {theme === "dark" ? "☀️ Светлая" : "🌙 Тёмная"}
+      {theme === "dark" ? "☀️" : "🌙"}
     </button>
   );
 }
