@@ -2025,9 +2025,6 @@ async function AnalyticsPageContent() {
     <div>
       <div className="toolbar">
         <h1>Аналитика</h1>
-        <a className="btn" href="/stock-import">
-          Импорт остатков
-        </a>
       </div>
 
       <AnalyticsTabs
