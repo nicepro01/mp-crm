@@ -16,6 +16,10 @@ type Row = {
   isProvisional: boolean;
 };
 
+function daysInMonth(year: number, month0: number): number {
+  return new Date(Date.UTC(year, month0 + 1, 0)).getUTCDate();
+}
+
 export async function GET(req: NextRequest) {
   const session = await getApiTenantSession();
   if (!session) return unauthorizedResponse();
@@ -52,6 +56,12 @@ async function GETContent(req: NextRequest) {
     ]);
 
     const byMonth = new Map<string, Row>();
+    // Сколько дневных строк реально попало в месяц — WB/Ozon хранят только то,
+    // что успело накопиться (см. lib/marketplaceFunnelSync.ts), а не весь
+    // календарный месяц целиком. Если дней меньше, чем в месяце — это
+    // НЕПОЛНЫЙ месяц, а не "настоящий" итог, и цифры занижены — помечаем
+    // isProvisional, чтобы UI честно это показал, а не выдавал за финал.
+    const dayCountByMonth = new Map<string, number>();
     for (const r of monthRows) {
       const key = r.periodStart.toISOString().slice(0, 7);
       byMonth.set(key, {
@@ -67,6 +77,7 @@ async function GETContent(req: NextRequest) {
     }
     for (const r of dayRows) {
       const key = r.periodStart.toISOString().slice(0, 7);
+      dayCountByMonth.set(key, (dayCountByMonth.get(key) ?? 0) + 1);
       const existing = byMonth.get(key);
       if (existing) {
         existing.orderedQty += r.orderedQty;
@@ -87,6 +98,17 @@ async function GETContent(req: NextRequest) {
           cancelledSumRub: Number(r.cancelledSumRub),
           isProvisional: r.isProvisional,
         });
+      }
+    }
+
+    // Помечаем неполные месяцы ПОСЛЕ агрегации — только для месяцев, у которых
+    // источник вообще был DAY (dayCountByMonth), MONTH-строки Яндекса (без
+    // записи в dayCountByMonth) неполными не бывают по определению отчёта.
+    for (const [key, dayCount] of dayCountByMonth) {
+      const [y, m] = key.split("-").map(Number);
+      if (dayCount < daysInMonth(y, m - 1)) {
+        const row = byMonth.get(key);
+        if (row) row.isProvisional = true;
       }
     }
 
