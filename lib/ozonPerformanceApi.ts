@@ -170,9 +170,24 @@ export async function fetchOzonPerformanceAdSpendBySku(
   const fromStr = dateFrom.toISOString().slice(0, 10);
   const toStr = dateTo.toISOString().slice(0, 10);
 
-  for (const batch of chunk(campaignIds, MAX_CAMPAIGNS_PER_REPORT)) {
-    const buffer = await requestAndDownloadReport(token, batch, fromStr, toStr);
-    await parseReportBuffer(buffer, spendBySku);
+  // Магазин с активной рекламой может иметь сотни SKU-кампаний (напр. 326 —
+  // 33 батча по 10) — последовательно это упирается в лимит времени
+  // серверлесс-функции (проверено эмпирически: 13 батчей уложились в 300с,
+  // 33 уже нет). Генерация отчёта у Ozon асинхронная и независимая на
+  // батч, поэтому гоняем все батчи параллельно; сбой одного батча не должен
+  // терять данные по остальным — это дополнительные данные, а не
+  // единственный источник (без них просто останется старое поведение
+  // через unattributed-котёл для этих SKU).
+  const batches = chunk(campaignIds, MAX_CAMPAIGNS_PER_REPORT);
+  const results = await Promise.allSettled(
+    batches.map((batch) => requestAndDownloadReport(token, batch, fromStr, toStr))
+  );
+  for (const result of results) {
+    if (result.status === "fulfilled") {
+      await parseReportBuffer(result.value, spendBySku);
+    } else {
+      console.error("Ozon Performance API: батч отчёта не удался:", result.reason);
+    }
   }
 
   return spendBySku;
