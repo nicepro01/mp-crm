@@ -1,6 +1,28 @@
 import { prisma } from "./prisma";
 import { getCurrentCompanyId } from "./tenantContext";
 
+// Товар найден через barcode/vendor_code (а не через уже существующую
+// MpListing) — значит для ЭТОЙ площадки+mpSku листинга ещё нет, хотя товар
+// уже заведён в каталоге (например, продаётся на другом магазине/площадке).
+// Без этого второй магазин Ozon (или любая площадка, сматченная по общему
+// артикулу/штрихкоду) никогда не получал бы свою запись в "Листинги" —
+// товар considered matched внутри MpImportItem, но нигде не виден как
+// листинг этой площадки, и его нельзя было ни экспортировать, ни
+// заархивировать.
+async function ensureListingForMatch(marketplaceId: string, mpSku: string, productId: string) {
+  await prisma.mpListing.upsert({
+    where: { marketplaceId_mpSku: { marketplaceId, mpSku } },
+    create: {
+      companyId: getCurrentCompanyId(),
+      productId,
+      marketplaceId,
+      mpSku,
+      commissionPct: 0,
+    },
+    update: {},
+  });
+}
+
 export type MatchResolution =
   | { status: "MATCHED"; matchedProductId: string; matchedVia: "mp_listing" | "barcode" | "vendor_code" }
   | { status: "PENDING"; matchedProductId: null; matchedVia: null };
@@ -82,6 +104,9 @@ export async function upsertImportItem(params: {
   });
 
   if (existing && existing.status !== "PENDING") {
+    if (existing.status === "MATCHED" && existing.matchedProductId) {
+      await ensureListingForMatch(marketplaceId, mpSku, existing.matchedProductId);
+    }
     return { status: "skipped", matchedProductId: existing.matchedProductId };
   }
 
@@ -106,6 +131,7 @@ export async function upsertImportItem(params: {
   }
 
   if (resolution.status === "MATCHED") {
+    await ensureListingForMatch(marketplaceId, mpSku, resolution.matchedProductId);
     return {
       status: "matched",
       matchedVia: resolution.matchedVia,
