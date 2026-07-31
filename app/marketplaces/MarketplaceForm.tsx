@@ -29,9 +29,12 @@ export default function MarketplaceForm({
   const [saving, setSaving] = useState(false);
 
   const isEdit = Boolean(initial?.id);
-  const availableCodes = Object.keys(codeLabels).filter(
-    (c) => c === initial?.code || !usedCodes.includes(c)
-  );
+  // Раньше код, уже занятый другой площадкой, исключался из списка — теперь
+  // у компании может быть несколько магазинов одной площадки (напр. два
+  // Ozon), поэтому выбрать можно любой код; отличаются они только полем
+  // "Название" (уникальным в пределах компании).
+  const availableCodes = Object.keys(codeLabels);
+  const codeUsedCount = (c: string) => usedCodes.filter((used) => used === c).length;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -70,17 +73,28 @@ export default function MarketplaceForm({
           value={code}
           onChange={(e) => {
             setCode(e.target.value);
-            if (!name) setName(codeLabels[e.target.value] ?? "");
+            if (!name) {
+              const baseLabel = codeLabels[e.target.value] ?? "";
+              const usedCount = codeUsedCount(e.target.value);
+              // Код уже занят другим магазином (напр. уже есть "Ozon") —
+              // подставляем "Ozon 2" вместо простого повтора названия,
+              // пользователь может поправить как угодно.
+              setName(usedCount > 0 ? `${baseLabel} ${usedCount + 1}` : baseLabel);
+            }
           }}
         >
           <option value="" disabled>
             Выберите площадку
           </option>
-          {availableCodes.map((c) => (
-            <option key={c} value={c}>
-              {codeLabels[c]}
-            </option>
-          ))}
+          {availableCodes.map((c) => {
+            const usedCount = codeUsedCount(c);
+            return (
+              <option key={c} value={c}>
+                {codeLabels[c]}
+                {usedCount > 0 ? ` (уже подключено: ${usedCount})` : ""}
+              </option>
+            );
+          })}
         </select>
       </label>
 

@@ -9,12 +9,6 @@ import { getInactiveListingKeys } from "@/lib/activeListings";
 
 export const dynamic = "force-dynamic";
 
-const marketplaceLabels: Record<string, string> = {
-  WB: "Wildberries",
-  OZON: "Ozon",
-  YANDEX_MARKET: "Яндекс.Маркет",
-};
-
 // УСН "доходы" — платим 6% с выплаты от площадки (не с полной цены продажи).
 const MARKETPLACE_TAX_RATE = 0.06;
 function computeProfitRub(payoutRub: number | null, cogsRub: number): number | null {
@@ -28,8 +22,7 @@ export default async function UnitEconomicsPage() {
 }
 
 async function UnitEconomicsPageContent() {
-  const [allUnitEconomics, salesAnalytics, inactiveListingKeys, activeListings, ozonMarketplace, yandexMarketplace] =
-    await Promise.all([
+  const [allUnitEconomics, salesAnalytics, inactiveListingKeys, activeListings, marketplaces] = await Promise.all([
     prisma.unitEconomics.findMany({
       // Товары, снятые с продажи целиком (isActive: false), не учитываем ни
       // в одной вкладке — конкретная площадка проверяется отдельно ниже.
@@ -38,11 +31,11 @@ async function UnitEconomicsPageContent() {
       orderBy: { calculatedAt: "desc" },
     }),
     // Продажи здесь не считаются — это отдельная таблица (аналитика по
-    // остаткам с площадок). Подтягиваем среднесуточные продажи по той же
-    // площадке, чтобы можно было сортировать и приоритизировать: маржа
+    // остаткам с площадок). Подтягиваем среднесуточные продажи по тому же
+    // магазину, чтобы можно было сортировать и приоритизировать: маржа
     // сама по себе бесполезна без понимания, сколько штук реально продаётся.
     prisma.productStockAnalytics.findMany({
-      include: { marketplace: { select: { code: true } } },
+      select: { productId: true, marketplaceId: true, avgDailySalesQty: true, qtyAvailable: true },
     }),
     getInactiveListingKeys(),
     // Активные листинги активных товаров — чтобы найти те, что реально
@@ -53,26 +46,18 @@ async function UnitEconomicsPageContent() {
       select: {
         productId: true,
         product: { select: { sku: true, name: true, photoUrl: true } },
-        marketplace: { select: { code: true } },
+        marketplace: { select: { id: true, code: true, name: true } },
       },
     }),
-    // Последний снимок расходов, которые Ozon не привязал ни к одному товару
-    // (реклама без sku, кросс-докинг и т.п.) — показываем статично, а не
-    // только сразу после нажатия кнопки синка в этой же сессии.
-    prisma.marketplace.findFirst({
-      where: { code: "OZON" },
+    // Все магазины компании — источник имён/кодов для вкладок (в отличие от
+    // жёстко заданных 3 названий раньше, теперь строк может быть больше, напр.
+    // два магазина Ozon) и снимка нераспределённых расходов (unattributedX,
+    // эти поля уже лежат прямо на строке Marketplace).
+    prisma.marketplace.findMany({
       select: {
-        unattributedAmountRub: true,
-        unattributedOperations: true,
-        unattributedSyncedAt: true,
-        unattributedBreakdown: true,
-      },
-    }),
-    // Тот же снимок, что и у Ozon выше, но для Яндекса (см. sync-yandex) —
-    // расходы без SKU/номера заказа в отчёте "Стоимость услуг маркетплейса".
-    prisma.marketplace.findFirst({
-      where: { code: "YANDEX_MARKET" },
-      select: {
+        id: true,
+        code: true,
+        name: true,
         unattributedAmountRub: true,
         unattributedOperations: true,
         unattributedSyncedAt: true,
@@ -80,38 +65,41 @@ async function UnitEconomicsPageContent() {
       },
     }),
   ]);
+  const marketplaceById = new Map(marketplaces.map((m) => [m.id, m]));
+
   // Товар может быть снят с продажи именно на этой площадке (MpListing.isActive
   // = false), но жив на других — тогда убираем только эту строку.
   const all = allUnitEconomics.filter(
-    (r) => !r.marketplace || !inactiveListingKeys.has(`${r.productId}|${r.marketplace}`)
+    (r) => !r.marketplaceId || !inactiveListingKeys.has(`${r.productId}|${r.marketplaceId}`)
   );
 
   const salesByProductAndMarketplace = new Map<string, number>();
   const stockByProductAndMarketplace = new Map<string, number>();
   for (const s of salesAnalytics) {
-    const key = `${s.productId}|${s.marketplace.code}`;
+    const key = `${s.productId}|${s.marketplaceId}`;
     const prevSales = salesByProductAndMarketplace.get(key) ?? 0;
     salesByProductAndMarketplace.set(key, prevSales + Number(s.avgDailySalesQty));
     const prevStock = stockByProductAndMarketplace.get(key) ?? 0;
     stockByProductAndMarketplace.set(key, prevStock + s.qtyAvailable);
   }
 
-  // Для каждой комбинации товар+площадка+период показываем только последний
+  // Для каждой комбинации товар+магазин+период показываем только последний
   // (самый свежий) расчёт — предыдущие версии остаются в БД как история.
   const latestByKey = new Map<string, (typeof all)[number]>();
   for (const rec of all) {
-    const key = `${rec.productId}|${rec.marketplace ?? "ALL"}|${rec.periodMonth
+    const key = `${rec.productId}|${rec.marketplaceId ?? "ALL"}|${rec.periodMonth
       .toISOString()
       .slice(0, 7)}`;
     if (!latestByKey.has(key)) latestByKey.set(key, rec);
   }
 
   const rows: UnitEconomicsRow[] = Array.from(latestByKey.values()).map((r) => {
-    const avgDailySalesQty = r.marketplace
-      ? salesByProductAndMarketplace.get(`${r.productId}|${r.marketplace}`) ?? 0
+    const mp = r.marketplaceId ? marketplaceById.get(r.marketplaceId) : null;
+    const avgDailySalesQty = r.marketplaceId
+      ? salesByProductAndMarketplace.get(`${r.productId}|${r.marketplaceId}`) ?? 0
       : 0;
-    const stockQty = r.marketplace
-      ? stockByProductAndMarketplace.get(`${r.productId}|${r.marketplace}`) ?? 0
+    const stockQty = r.marketplaceId
+      ? stockByProductAndMarketplace.get(`${r.productId}|${r.marketplaceId}`) ?? 0
       : 0;
     const netMarginRub = Number(r.netMarginRub);
     const payoutRub = r.payoutRub !== null ? Number(r.payoutRub) : null;
@@ -123,8 +111,8 @@ async function UnitEconomicsPageContent() {
       sku: r.product.sku,
       name: r.product.name,
       photoUrl: r.product.photoUrl,
-      marketplaceLabel: r.marketplace ? marketplaceLabels[r.marketplace] : "Все",
-      marketplaceCode: r.marketplace ?? null,
+      marketplaceLabel: mp ? mp.name : "Все",
+      marketplaceId: r.marketplaceId ?? null,
       period: r.periodMonth.toISOString().slice(0, 7),
       cogsRub,
       mpCommissionRub: Number(r.mpCommissionRub),
@@ -154,16 +142,16 @@ async function UnitEconomicsPageContent() {
     };
   });
 
-  // Выплата по каждой площадке для товара — строится один раз по ВСЕМ
+  // Выплата по каждому магазину для товара — строится один раз по ВСЕМ
   // строкам сразу (не только для "Общей") и используется везде: и на
-  // "Общей", и на вкладке каждой конкретной площадки — там это даёт
+  // "Общей", и на вкладке каждого конкретного магазина — там это даёт
   // возможность сразу увидеть, как тот же товар выглядит на ДРУГИХ
-  // площадках, не переключаясь на них по отдельности.
+  // магазинах, не переключаясь на них по отдельности.
   const payoutByMarketplaceBySku = new Map<string, Record<string, number | null>>();
   for (const r of rows) {
-    if (!r.marketplaceCode) continue;
+    if (!r.marketplaceId) continue;
     const entry = payoutByMarketplaceBySku.get(r.sku) ?? {};
-    entry[r.marketplaceCode] = r.payoutRub;
+    entry[r.marketplaceId] = r.payoutRub;
     payoutByMarketplaceBySku.set(r.sku, entry);
   }
   for (const r of rows) {
@@ -172,19 +160,18 @@ async function UnitEconomicsPageContent() {
 
   // Товар активен и выставлен на площадке (mp_listings.isActive), но за
   // текущий период там не было ни строчки юнит-экономики — либо продаж не
-  // было совсем, либо синк для этой площадки ещё не запускали. Показываем
+  // было совсем, либо синк для этого магазина ещё не запускали. Показываем
   // это явно, а не молча пропускаем строку — иначе непонятно, куда делся
   // товар из общего количества активных позиций.
   const existingCombos = new Set(
-    allUnitEconomics.filter((r) => r.marketplace).map((r) => `${r.productId}|${r.marketplace}`)
+    allUnitEconomics.filter((r) => r.marketplaceId).map((r) => `${r.productId}|${r.marketplaceId}`)
   );
   const currentPeriod = new Date().toISOString().slice(0, 7);
   const seenNoSalesCombos = new Set<string>();
   const noSalesRows: UnitEconomicsRow[] = [];
   for (const l of activeListings) {
-    const code = l.marketplace.code;
-    if (!marketplaceLabels[code]) continue;
-    const comboKey = `${l.productId}|${code}`;
+    const marketplaceId = l.marketplace.id;
+    const comboKey = `${l.productId}|${marketplaceId}`;
     if (existingCombos.has(comboKey) || seenNoSalesCombos.has(comboKey)) continue;
     seenNoSalesCombos.add(comboKey);
     noSalesRows.push({
@@ -192,7 +179,8 @@ async function UnitEconomicsPageContent() {
       sku: l.product.sku,
       name: l.product.name,
       photoUrl: l.product.photoUrl,
-      marketplaceLabel: marketplaceLabels[code],
+      marketplaceLabel: l.marketplace.name,
+      marketplaceId,
       period: currentPeriod,
       cogsRub: 0,
       mpCommissionRub: 0,
@@ -224,11 +212,11 @@ async function UnitEconomicsPageContent() {
     });
   }
 
-  // "Общая" вкладка — один товар может продаваться на нескольких площадках
+  // "Общая" вкладка — один товар может продаваться в нескольких магазинах
   // сразу, тут агрегируем всё в одну строку, чтобы сразу видеть общую
-  // картину, не листая площадки по отдельности. Взвешиваем по среднесуточным
-  // продажам — площадка, где товар реально продаётся активнее, должна
-  // сильнее влиять на итоговую (среднюю) маржу, чем площадка почти без продаж.
+  // картину, не листая магазины по отдельности. Взвешиваем по среднесуточным
+  // продажам — магазин, где товар реально продаётся активнее, должен
+  // сильнее влиять на итоговую (среднюю) маржу, чем магазин почти без продаж.
   type ProductAgg = {
     sku: string;
     name: string;
@@ -249,9 +237,9 @@ async function UnitEconomicsPageContent() {
     sumReturnsQty: number;
     cogsRub: number;
     latestPeriod: string;
-    // Выплата по каждой конкретной площадке (не взвешенное среднее, а
-    // прямое значение той же строки, что показана на вкладке этой площадки)
-    // — рядом друг с другом на вкладке "Общая", см. payoutMarketplaceCodes.
+    // Выплата по каждому конкретному магазину (не взвешенное среднее, а
+    // прямое значение той же строки, что показана на вкладке этого
+    // магазина) — рядом друг с другом на вкладке "Общая".
     payoutByMarketplace: Record<string, number | null>;
   };
   const byProduct = new Map<string, ProductAgg>();
@@ -287,7 +275,7 @@ async function UnitEconomicsPageContent() {
     agg.sumStockQty += r.stockQty;
     agg.sumProfitPerDay += r.profitPerDayRub;
     agg.sumReturnsQty += r.returnsQty;
-    // Вес — продажи, а если их совсем нет ни на одной площадке, берём 1 на
+    // Вес — продажи, а если их совсем нет ни в одном магазине, берём 1 на
     // строку, чтобы получить хотя бы простое среднее вместо деления на 0.
     const weight = r.avgDailySalesQty > 0 ? r.avgDailySalesQty : 0.0001;
     agg.weightedSellPrice += r.sellPriceRub * weight;
@@ -299,17 +287,17 @@ async function UnitEconomicsPageContent() {
     agg.weightedStorage += r.storageRub * weight;
     agg.weightedOtherFees += (r.otherFeesRub ?? 0) * weight;
     agg.weightedPayout += (r.payoutRub ?? 0) * weight;
-    if (r.marketplaceCode) agg.payoutByMarketplace[r.marketplaceCode] = r.payoutRub;
+    if (r.marketplaceId) agg.payoutByMarketplace[r.marketplaceId] = r.payoutRub;
     if (r.period > agg.latestPeriod) agg.latestPeriod = r.period;
   }
 
-  // Товары без единого реального расчёта НИ НА ОДНОЙ площадке раньше вообще
+  // Товары без единого реального расчёта НИ В ОДНОМ магазине раньше вообще
   // не попадали в "Общую" (byProduct строился только из rows) — из-за этого
-  // "Общая" была меньше отдельных вкладок площадок, хотя должна быть их
+  // "Общая" была меньше отдельных вкладок магазинов, хотя должна быть их
   // объединением. Если у товара есть данные хотя бы где-то — просто
-  // добавляем площадку без данных в список меток (agg.labels), это уже не
+  // добавляем магазин без данных в список меток (agg.labels), это уже не
   // "пустышка"; если данных нет вообще нигде — отдельная строка-заглушка,
-  // как и на вкладке конкретной площадки.
+  // как и на вкладке конкретного магазина.
   type NoDataAgg = { sku: string; name: string; photoUrl: string | null; labels: Set<string>; stockQty: number };
   const noDataBySku = new Map<string, NoDataAgg>();
   for (const r of noSalesRows) {
@@ -403,46 +391,36 @@ async function UnitEconomicsPageContent() {
     ...noDataOverallRows,
   ];
 
-  const unattributedByLabel: Record<string, typeof ozonMarketplace> = {
-    Ozon: ozonMarketplace,
-    "Яндекс.Маркет": yandexMarketplace,
-  };
-
-  // Обратный словарь label -> код площадки — нужен, чтобы на вкладке
-  // конкретной площадки колонка "Выплата" показывала ТОЛЬКО её (см.
-  // payoutMarketplaceCodes ниже), а не все три сразу, как на "Общей".
-  const codeByLabel = Object.fromEntries(Object.entries(marketplaceLabels).map(([code, l]) => [l, code]));
-
-  const marketplaceLabelsPresent = [
-    ...new Set([...rows, ...noSalesRows].map((r) => r.marketplaceLabel)),
-  ].sort();
-  const marketplaceTabs = marketplaceLabelsPresent.map((label) => {
+  const marketplaceIdsPresent = [
+    ...new Set([...rows, ...noSalesRows].map((r) => r.marketplaceId).filter((id): id is string => Boolean(id))),
+  ];
+  const marketplaceTabs = marketplaceIdsPresent.map((marketplaceId) => {
+    const mp = marketplaceById.get(marketplaceId);
+    const label = mp?.name ?? marketplaceId;
     const tabRows = [
-      ...rows.filter((r) => r.marketplaceLabel === label),
-      ...noSalesRows.filter((r) => r.marketplaceLabel === label),
+      ...rows.filter((r) => r.marketplaceId === marketplaceId),
+      ...noSalesRows.filter((r) => r.marketplaceId === marketplaceId),
     ];
-    const unattributed = unattributedByLabel[label];
-    const code = codeByLabel[label];
     return {
-      key: label,
+      key: marketplaceId,
       label: `${label} (${tabRows.length})`,
       content: (
         <>
-          {unattributed?.unattributedAmountRub != null && (
+          {mp?.unattributedAmountRub != null && (
             <UnattributedSummary
               data={{
-                amountRub: Number(unattributed.unattributedAmountRub),
-                operations: unattributed.unattributedOperations ?? 0,
-                syncedAt: unattributed.unattributedSyncedAt?.toISOString() ?? null,
+                amountRub: Number(mp.unattributedAmountRub),
+                operations: mp.unattributedOperations ?? 0,
+                syncedAt: mp.unattributedSyncedAt?.toISOString() ?? null,
                 breakdown:
-                  (unattributed.unattributedBreakdown as Record<
+                  (mp.unattributedBreakdown as Record<
                     string,
                     { amount: number; count: number }
                   > | null) ?? null,
               }}
             />
           )}
-          <UnitEconomicsTable rows={tabRows} payoutMarketplaceCodes={code ? [code] : []} />
+          <UnitEconomicsTable rows={tabRows} payoutMarketplaces={mp ? [{ id: mp.id, name: mp.name }] : []} />
         </>
       ),
     };
@@ -476,7 +454,7 @@ async function UnitEconomicsPageContent() {
                 <UnitEconomicsTable
                   rows={overallRows}
                   showActions={false}
-                  payoutMarketplaceCodes={Object.keys(marketplaceLabels)}
+                  payoutMarketplaces={marketplaces.map((m) => ({ id: m.id, name: m.name }))}
                 />
               ),
             },

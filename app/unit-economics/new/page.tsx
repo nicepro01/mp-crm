@@ -11,10 +11,13 @@ export default async function NewUnitEconomicsPage() {
 }
 
 async function NewUnitEconomicsPageContent() {
-  const products = await prisma.product.findMany({
-    orderBy: { name: "asc" },
-    select: { id: true, sku: true, name: true },
-  });
+  const [products, marketplaces] = await Promise.all([
+    prisma.product.findMany({
+      orderBy: { name: "asc" },
+      select: { id: true, sku: true, name: true },
+    }),
+    prisma.marketplace.findMany({ orderBy: { name: "asc" }, select: { id: true, code: true, name: true } }),
+  ]);
 
   return (
     <div>
@@ -22,7 +25,7 @@ async function NewUnitEconomicsPageContent() {
       {products.length === 0 ? (
         <p className="error">Сначала добавьте хотя бы один товар.</p>
       ) : (
-        <UnitEconomicsForm products={products} />
+        <UnitEconomicsForm products={products} marketplaces={marketplaces} />
       )}
     </div>
   );

@@ -1,20 +1,15 @@
+import type { Marketplace } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getCurrentCompanyId } from "./tenantContext";
-import { MarketplaceNotConfiguredError } from "./syncErrors";
 import { fetchWbNmIdToVendorCode, fetchWbClaims, WbClaim } from "./wbApi";
 
 // Извлечено из app/api/returns/sync-wb/route.ts без изменений в логике —
 // см. lib/unitEconomicsSync.ts для объяснения зачем.
-export async function syncWbReturns() {
-  const marketplace = await prisma.marketplace.findFirst({ where: { code: "WB" } });
-  if (!marketplace) {
-    throw new MarketplaceNotConfiguredError("Площадка WB не найдена — сначала добавьте её на странице «Площадки»");
-  }
-
+export async function syncWbReturns(marketplace: Marketplace) {
   const [nmIdMap, active, archived] = await Promise.all([
-    fetchWbNmIdToVendorCode(),
-    fetchWbClaims(false),
-    fetchWbClaims(true),
+    fetchWbNmIdToVendorCode(marketplace.id),
+    fetchWbClaims(marketplace.id, false),
+    fetchWbClaims(marketplace.id, true),
   ]);
 
   const claims: WbClaim[] = [...active, ...archived];

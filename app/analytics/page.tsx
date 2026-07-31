@@ -126,19 +126,21 @@ async function AnalyticsPageContent() {
   // Товар может быть снят с продажи именно на этой площадке (MpListing.isActive
   // = false), но жив на других — тогда убираем только эту конкретную строку,
   // а не весь товар (см. lib/activeListings.ts).
-  const rows = allRows.filter((r) => !inactiveListingKeys.has(`${r.productId}|${r.marketplace.code}`));
+  const rows = allRows.filter((r) => !inactiveListingKeys.has(`${r.productId}|${r.marketplace.id}`));
 
-  // Последний расчёт юнит-экономики на (товар, площадка) — unitEconomics уже
-  // отсортирован по calculatedAt desc, поэтому первое попавшееся значение на
-  // ключ и есть самое свежее.
+  // Последний расчёт юнит-экономики на (товар, КОНКРЕТНЫЙ магазин) —
+  // unitEconomics уже отсортирован по calculatedAt desc, поэтому первое
+  // попавшееся значение на ключ и есть самое свежее. Ключ — marketplaceId
+  // (не code), т.к. у компании может быть несколько магазинов одной площадки
+  // (напр. два Ozon) с независимой юнит-экономикой каждый.
   const latestUeByProductMarketplace = new Map<string, (typeof unitEconomics)[number]>();
   for (const ue of unitEconomics) {
-    if (!ue.marketplace) continue;
-    const key = `${ue.productId}|${ue.marketplace}`;
+    if (!ue.marketplaceId) continue;
+    const key = `${ue.productId}|${ue.marketplaceId}`;
     if (!latestUeByProductMarketplace.has(key)) latestUeByProductMarketplace.set(key, ue);
   }
-  function marginFields(productId: string, marketplaceCode: string) {
-    const ue = latestUeByProductMarketplace.get(`${productId}|${marketplaceCode}`);
+  function marginFields(productId: string, marketplaceId: string) {
+    const ue = latestUeByProductMarketplace.get(`${productId}|${marketplaceId}`);
     if (!ue)
       return {
         cogsRub: null,
@@ -236,8 +238,8 @@ async function AnalyticsPageContent() {
   // Ozon, Яндекс), а не только Ozon через старую ProductClusterAnalytics.
   // Заодно копим тот же набор строк в формате для вкладки "По регионам" (см.
   // buildMarketplaceSection ниже) — там, где у площадки нет своего отчёта.
-  const warehouseBreakdownByMarketplaceCode: Record<string, Record<string, ClusterRow[]>> = {};
-  const heuristicRegionRowsByCode: Record<
+  const warehouseBreakdownByMarketplaceId: Record<string, Record<string, ClusterRow[]>> = {};
+  const heuristicRegionRowsByMarketplaceId: Record<
     string,
     { id: string; productId: string; clusterName: string; qtyAvailable: number; avgDailySalesQty: number; daysOfStockLeft: number | null; liquidityStatus: string | null; product: { sku: string; name: string; photoUrl: string | null } }[]
   > = {};
@@ -247,7 +249,7 @@ async function AnalyticsPageContent() {
     const avgDaily = Number(w.avgDailySalesQty);
     const daysOfStockLeft = avgDaily > 0 ? Math.round(w.qtyAvailable / avgDaily) : null;
 
-    const byProduct = warehouseBreakdownByMarketplaceCode[code] ?? (warehouseBreakdownByMarketplaceCode[code] = {});
+    const byProduct = warehouseBreakdownByMarketplaceId[w.marketplaceId] ?? (warehouseBreakdownByMarketplaceId[w.marketplaceId] = {});
     const list = byProduct[w.productId] ?? (byProduct[w.productId] = []);
     list.push({
       id: w.id,
@@ -261,7 +263,7 @@ async function AnalyticsPageContent() {
     if (code !== "OZON") {
       const product = productById.get(w.productId);
       if (!product) continue;
-      const regionList = heuristicRegionRowsByCode[code] ?? (heuristicRegionRowsByCode[code] = []);
+      const regionList = heuristicRegionRowsByMarketplaceId[w.marketplaceId] ?? (heuristicRegionRowsByMarketplaceId[w.marketplaceId] = []);
       regionList.push({
         id: w.id,
         productId: w.productId,
@@ -370,6 +372,7 @@ async function AnalyticsPageContent() {
       id: r.id,
       productId: r.productId,
       marketplaceCode: r.marketplace.code,
+      marketplaceId: r.marketplace.id,
       sku: r.product?.sku ?? r.mpSku,
       name: r.product?.name ?? "—",
       photoUrl: r.product?.photoUrl ?? null,
@@ -393,7 +396,7 @@ async function AnalyticsPageContent() {
       purchasePriceRub: productById.get(r.productId)?.purchasePriceRub
         ? Number(productById.get(r.productId)!.purchasePriceRub)
         : null,
-      ...marginFields(r.productId, r.marketplace.code),
+      ...marginFields(r.productId, r.marketplace.id),
     };
   });
 
@@ -401,19 +404,23 @@ async function AnalyticsPageContent() {
   // строки остатков (синк ещё не запускали / нет данных от API) — раньше
   // такие товары молча пропадали из счётчика вкладки конкретной площадки,
   // расходясь со страницей «Товары». Показываем явной строкой-плейсхолдером
-  // с пометкой «нет данных», тот же приём, что и на «Юнит-экономике».
-  const existingListingCombos = new Set(rows.map((r) => `${r.productId}|${r.marketplace.code}`));
+  // с пометкой «нет данных», тот же приём, что и на «Юнит-экономике». Ключ
+  // комбинации — по marketplaceId (конкретный магазин), не по code — иначе
+  // строка на одном Ozon-магазине маскировала бы "нет данных" на втором.
+  const existingListingCombos = new Set(rows.map((r) => `${r.productId}|${r.marketplace.id}`));
   const seenNoDataCombos = new Set<string>();
   const noDataRows: typeof perListingRows = [];
   for (const l of activeListings) {
     const code = l.marketplace.code;
-    const comboKey = `${l.productId}|${code}`;
+    const marketplaceId = l.marketplace.id;
+    const comboKey = `${l.productId}|${marketplaceId}`;
     if (existingListingCombos.has(comboKey) || seenNoDataCombos.has(comboKey)) continue;
     seenNoDataCombos.add(comboKey);
     noDataRows.push({
       id: `nodata-${comboKey}`,
       productId: l.productId,
       marketplaceCode: code,
+      marketplaceId,
       sku: l.product.sku,
       name: l.product.name,
       photoUrl: l.product.photoUrl,
@@ -440,20 +447,31 @@ async function AnalyticsPageContent() {
       // Синк юнит-экономики иногда матчит товар напрямую по артикулу, минуя
       // MpListing (см. sync-yandex) — маржа может быть посчитана, даже если
       // строки остатков для этой площадки ещё нет.
-      ...marginFields(l.productId, code),
+      ...marginFields(l.productId, marketplaceId),
     });
   }
 
-  // Список площадок, по которым реально есть данные (включая только
-  // плейсхолдеры) — вкладки под них формируются автоматически, без
-  // хардкода конкретных названий.
-  const marketplaceCodes: string[] = [
-    ...new Set([...rows.map((r): string => r.marketplace.code), ...noDataRows.map((r) => r.marketplaceCode)]),
-  ];
-  const marketplaceNameByCode = new Map<string, string>([
-    ...rows.map((r): readonly [string, string] => [r.marketplace.code, r.marketplace.name]),
-    ...activeListings.map((l): readonly [string, string] => [l.marketplace.code, l.marketplace.name]),
-  ]);
+  // Список КОНКРЕТНЫХ МАГАЗИНОВ (строк Marketplace) — основная ось разбивки
+  // по площадкам на этой странице (вкладки, сравнение, дашборд). В отличие
+  // от простого списка кодов, различает два магазина одного кода (напр.
+  // "Ozon" и "Ozon 2") как отдельные сущности.
+  const marketplaceRows: { id: string; code: string; name: string }[] = [];
+  {
+    const seen = new Set<string>();
+    for (const r of rows) {
+      if (!seen.has(r.marketplace.id)) {
+        seen.add(r.marketplace.id);
+        marketplaceRows.push({ id: r.marketplace.id, code: r.marketplace.code, name: r.marketplace.name });
+      }
+    }
+    for (const l of activeListings) {
+      if (!seen.has(l.marketplace.id)) {
+        seen.add(l.marketplace.id);
+        marketplaceRows.push({ id: l.marketplace.id, code: l.marketplace.code, name: l.marketplace.name });
+      }
+    }
+  }
+  const marketplaceNameById = new Map(marketplaceRows.map((r) => [r.id, r.name]));
 
   // Единый набор колонок для всех сводных под-вкладок площадки (Все товары/
   // Пора заказывать/Неликвид) — строка уже одна на конкретную площадку,
@@ -518,9 +536,7 @@ async function AnalyticsPageContent() {
 
   const qtyByProductMarketplaceMonth = new Map<string, number>();
   for (const m of monthlyTrendRows) {
-    const code = marketplaceCodeById.get(m.marketplaceId);
-    if (!code) continue;
-    const key = `${m.productId}|${code}|${m.year}-${m.month}`;
+    const key = `${m.productId}|${m.marketplaceId}|${m.year}-${m.month}`;
     qtyByProductMarketplaceMonth.set(key, (qtyByProductMarketplaceMonth.get(key) ?? 0) + m.qtySold);
   }
 
@@ -529,11 +545,11 @@ async function AnalyticsPageContent() {
   // стабильность спроса). X — коэффициент вариации месячных продаж ≤10%
   // (стабильный спрос), Y — 10-25% (умеренные колебания), Z — >25%
   // (нестабильный/сезонный/эпизодический спрос). Считаем по тем же 6
-  // последним полным месяцам, что и «Динамика» этой же площадки — если
+  // последним полным месяцам, что и «Динамика» этого же магазина — если
   // известно меньше 3 месяцев истории, классификация ненадёжна (null).
-  function xyzTierFor(productId: string, code: string): "X" | "Y" | "Z" | null {
+  function xyzTierFor(productId: string, marketplaceId: string): "X" | "Y" | "Z" | null {
     const monthly = trendMonths
-      .map((m) => qtyByProductMarketplaceMonth.get(`${productId}|${code}|${m.year}-${m.month}`))
+      .map((m) => qtyByProductMarketplaceMonth.get(`${productId}|${marketplaceId}|${m.year}-${m.month}`))
       .filter((v): v is number => v !== undefined);
     if (monthly.length < 3) return null;
     const mean = monthly.reduce((sum, v) => sum + v, 0) / monthly.length;
@@ -545,16 +561,16 @@ async function AnalyticsPageContent() {
     return "Z";
   }
 
-  function buildTrendRows(code: string): Record<string, unknown>[] {
+  function buildTrendRows(marketplaceId: string): Record<string, unknown>[] {
     const productIds = new Set(
-      monthlyTrendRows.filter((m) => marketplaceCodeById.get(m.marketplaceId) === code).map((m) => m.productId)
+      monthlyTrendRows.filter((m) => m.marketplaceId === marketplaceId).map((m) => m.productId)
     );
     return [...productIds]
       .map((productId) => {
         const product = productById.get(productId);
         if (!product) return null;
         const monthly = trendMonths.map(
-          (m) => qtyByProductMarketplaceMonth.get(`${productId}|${code}|${m.year}-${m.month}`) ?? 0
+          (m) => qtyByProductMarketplaceMonth.get(`${productId}|${marketplaceId}|${m.year}-${m.month}`) ?? 0
         );
         const totalQty = monthly.reduce((sum, q) => sum + q, 0);
         if (totalQty === 0) return null; // нет продаж вообще за окно — не загромождаем таблицу нулями
@@ -597,11 +613,11 @@ async function AnalyticsPageContent() {
     description: "Сколько заявок на возврат сейчас висит нерешённых — живой снимок, не за период. Детали — на странице «Возвраты»",
   };
 
-  function buildReturnRows(code: string): { id: string; sku: string; name: string; photoUrl: string | null; quantitySold: number; returnsQty: number; returnPct: number | null; openClaimsWb: number }[] {
+  function buildReturnRows(marketplaceId: string): { id: string; sku: string; name: string; photoUrl: string | null; quantitySold: number; returnsQty: number; returnPct: number | null; openClaimsWb: number }[] {
     const result: ReturnType<typeof buildReturnRows> = [];
     for (const [key, ue] of latestUeByProductMarketplace) {
-      if (ue.marketplace !== code) continue;
-      const openClaimsWb = code === "WB" ? openClaimsByProduct.get(ue.productId) ?? 0 : 0;
+      if (ue.marketplaceId !== marketplaceId) continue;
+      const openClaimsWb = ue.marketplace === "WB" ? openClaimsByProduct.get(ue.productId) ?? 0 : 0;
       if (ue.returnsQty <= 0 && openClaimsWb <= 0) continue;
       const product = productById.get(ue.productId);
       if (!product) continue;
@@ -636,10 +652,10 @@ async function AnalyticsPageContent() {
     cumulativePct: number;
     tier: "A" | "B" | "C";
   };
-  function buildAbcRows(code: string): AbcRow[] {
+  function buildAbcRows(marketplaceId: string): AbcRow[] {
     const items: { productId: string; sku: string; name: string; photoUrl: string | null; revenueRub: number }[] = [];
     for (const ue of latestUeByProductMarketplace.values()) {
-      if (ue.marketplace !== code) continue;
+      if (ue.marketplaceId !== marketplaceId) continue;
       const product = productById.get(ue.productId);
       if (!product) continue;
       const quantitySold = Number((ue.details as Record<string, unknown> | null)?.quantitySold ?? 0);
@@ -672,18 +688,18 @@ async function AnalyticsPageContent() {
   // Пора заказывать и т.д.) была общей сразу для всех 3 площадок, что
   // смешивало цифры и не давало понять, что происходит конкретно на WB или
   // Ozon. Теперь площадка — это цельный раздел со своими под-вкладками.
-  function buildMarketplaceSection(code: string) {
-    // Считаем ABC один раз на площадку — используется и как отдельный
+  function buildMarketplaceSection(mpRow: { id: string; code: string; name: string }) {
+    const { id: marketplaceId, code, name: marketplaceName } = mpRow;
+    // Считаем ABC один раз на магазин — используется и как отдельный
     // столбец "ABC" в "Все товары"/"Пора заказывать", и как детальная
     // вкладка "ABC-анализ" ниже (с долями/накопленным % и т.д.).
-    const abcRows = buildAbcRows(code);
+    const abcRows = buildAbcRows(marketplaceId);
     const abcTierByProductId = new Map(abcRows.map((r) => [r.id, r.tier]));
     const codeRows = [
-      ...perListingRows.filter((r) => r.marketplaceCode === code),
-      ...noDataRows.filter((r) => r.marketplaceCode === code),
+      ...perListingRows.filter((r) => r.marketplaceId === marketplaceId),
+      ...noDataRows.filter((r) => r.marketplaceId === marketplaceId),
     ].map((r) => ({ ...r, abcTier: abcTierByProductId.get(r.productId) ?? null }));
     const reorderRows = codeRows.filter((r) => r.needsReorder);
-    const marketplaceName = marketplaceNameByCode.get(code) ?? code;
     // Тот же период, что и у расчёта юнит-экономики (см. sync-wb/sync-ozon/
     // sync-yandex) — используется и в «Возвраты», и в «ABC-анализ» ниже, оба
     // считаются от того же ue.
@@ -772,7 +788,7 @@ async function AnalyticsPageContent() {
               defaultSortKey={sortKey}
               defaultSortDir={sortDir}
               expandKey="productId"
-              clustersByKey={warehouseBreakdownByMarketplaceCode[code]}
+              clustersByKey={warehouseBreakdownByMarketplaceId[marketplaceId]}
               expandGroupLabel="Город/склад"
               expandSectionTitle="По городам/складам"
               dense
@@ -833,7 +849,7 @@ async function AnalyticsPageContent() {
       {
         key: "recommendations",
         label: "Рекомендации",
-        content: <AnalyticsTabs tabs={buildMarketplaceRecommendationTabs(code)} />,
+        content: <AnalyticsTabs tabs={buildMarketplaceRecommendationTabs(mpRow)} />,
       },
     ];
 
@@ -853,7 +869,7 @@ async function AnalyticsPageContent() {
             liquidityStatus: c.liquidityStatus,
             product: c.product,
           }))
-        : (heuristicRegionRowsByCode[code] ?? []);
+        : (heuristicRegionRowsByMarketplaceId[marketplaceId] ?? []);
     if (regionRows.length > 0) {
       subTabs.push({
         key: "regions",
@@ -872,7 +888,7 @@ async function AnalyticsPageContent() {
       });
     }
 
-    const trendRows = buildTrendRows(code);
+    const trendRows = buildTrendRows(marketplaceId);
     subTabs.push({
       key: "trend",
       label: `Динамика (${trendRows.length})`,
@@ -903,7 +919,7 @@ async function AnalyticsPageContent() {
         ),
     });
 
-    const returnRows = buildReturnRows(code);
+    const returnRows = buildReturnRows(marketplaceId);
     subTabs.push({
       key: "returns",
       label: `Возвраты (${returnRows.length})`,
@@ -945,7 +961,7 @@ async function AnalyticsPageContent() {
     // ровным спросом, "CZ" — мелкий и нестабильный, первый кандидат на вывод
     // из ассортимента); если истории меньше 3 месяцев, xyzTier/matrixTier — null.
     const abcXyzRows = abcRows.map((r) => {
-      const xyzTier = xyzTierFor(r.id, code);
+      const xyzTier = xyzTierFor(r.id, marketplaceId);
       return { ...r, xyzTier, matrixTier: xyzTier ? `${r.tier}${xyzTier}` : null };
     });
     const abcColumns: SortableColumn[] = [
@@ -1020,11 +1036,11 @@ async function AnalyticsPageContent() {
     subTabs.push({
       key: "funnel-charts",
       label: "Графики",
-      content: <FunnelChartWidget code={code} marketplaceName={marketplaceName} />,
+      content: <FunnelChartWidget marketplaceId={marketplaceId} code={code} marketplaceName={marketplaceName} />,
     });
 
     return {
-      key: `mp-${code}`,
+      key: `mp-${marketplaceId}`,
       label: `${marketplaceName} (${codeRows.length})`,
       content: <AnalyticsTabs tabs={subTabs} />,
     };
@@ -1039,7 +1055,7 @@ async function AnalyticsPageContent() {
   // выручку оцениваем по текущей цене на площадке, а не пропускаем совсем.
   const avgPriceByProductMarketplace = new Map<string, number>();
   for (const r of rows) {
-    if (r.avgPriceRub) avgPriceByProductMarketplace.set(`${r.productId}|${r.marketplace.code}`, Number(r.avgPriceRub));
+    if (r.avgPriceRub) avgPriceByProductMarketplace.set(`${r.productId}|${r.marketplace.id}`, Number(r.avgPriceRub));
   }
 
   function monthKeyPadded(year: number, month: number): string {
@@ -1054,8 +1070,9 @@ async function AnalyticsPageContent() {
   // последнего расчёта юнит-экономики (или текущей цены, см. выше) — это
   // ОЦЕНКА выручки, реальной истории цены по месяцам в базе нет
   // (юнит-экономика хранит только последний снимок). Копим сразу по
-  // площадкам ("ALL" — все вместе, плюс каждый code отдельно) — переключатель
-  // на дашборде даёт смотреть и общую картину, и любую площадку в отдельности.
+  // магазинам ("ALL" — все вместе, плюс каждый marketplaceId отдельно) —
+  // переключатель на дашборде даёт смотреть и общую картину, и любой
+  // конкретный магазин в отдельности (в т.ч. различая два магазина Ozon).
   const revenueByScopeMonth = new Map<string, Map<string, number>>();
   const qtyByScopeMonth = new Map<string, Map<string, number>>();
   // Профит по месяцам — та же оценка (реальные штуки × текущий профит/шт),
@@ -1070,25 +1087,24 @@ async function AnalyticsPageContent() {
     map.set(scope, inner);
   }
   for (const m of monthlyTrendRows) {
-    const code = marketplaceCodeById.get(m.marketplaceId);
-    if (!code) continue;
+    const marketplaceId = m.marketplaceId;
     const productMonthKey = `${m.productId}|${m.year}-${m.month}`;
     qtyByProductMonthAll.set(productMonthKey, (qtyByProductMonthAll.get(productMonthKey) ?? 0) + m.qtySold);
 
     const monthKey = monthKeyPadded(m.year, m.month);
-    const margin = marginFields(m.productId, code);
-    const price = margin.sellPriceRub ?? avgPriceByProductMarketplace.get(`${m.productId}|${code}`) ?? 0;
+    const margin = marginFields(m.productId, marketplaceId);
+    const price = margin.sellPriceRub ?? avgPriceByProductMarketplace.get(`${m.productId}|${marketplaceId}`) ?? 0;
     const revenue = price * m.qtySold;
     addScopeMonth(revenueByScopeMonth, "ALL", monthKey, revenue);
-    addScopeMonth(revenueByScopeMonth, code, monthKey, revenue);
+    addScopeMonth(revenueByScopeMonth, marketplaceId, monthKey, revenue);
     addScopeMonth(qtyByScopeMonth, "ALL", monthKey, m.qtySold);
-    addScopeMonth(qtyByScopeMonth, code, monthKey, m.qtySold);
+    addScopeMonth(qtyByScopeMonth, marketplaceId, monthKey, m.qtySold);
 
     if (margin.payoutRub !== null) {
       const profitPerUnit = margin.payoutRub * (1 - MARKETPLACE_TAX_RATE) - (margin.cogsRub ?? 0);
       const profit = profitPerUnit * m.qtySold;
       addScopeMonth(profitByScopeMonth, "ALL", monthKey, profit);
-      addScopeMonth(profitByScopeMonth, code, monthKey, profit);
+      addScopeMonth(profitByScopeMonth, marketplaceId, monthKey, profit);
     }
   }
   const chartMonthKeys = [...new Set(monthlyTrendRows.map((m) => monthKeyPadded(m.year, m.month)))]
@@ -1096,23 +1112,24 @@ async function AnalyticsPageContent() {
     .slice(-12);
   // Цвета площадок — только для составных столбиков на "Все площадки" ниже,
   // подобраны узнаваемо близко к брендам (WB — фиолетовый, Ozon — синий,
-  // Яндекс.Маркет — жёлтый).
+  // Яндекс.Маркет — жёлтый). Ключ — code (тип площадки), поэтому два
+  // магазина одного кода (напр. Ozon/Ozon 2) получают тот же фирменный цвет.
   const MARKETPLACE_CHART_COLORS: Record<string, string> = {
     WB: "#9333ea",
     OZON: "#0069ff",
     YANDEX_MARKET: "#f5c518",
   };
-  const chartLegend = marketplaceCodes.map((code) => ({
-    code,
-    label: marketplaceNameByCode.get(code) ?? code,
-    color: MARKETPLACE_CHART_COLORS[code] ?? "#9ca3af",
+  const chartLegend = marketplaceRows.map((row) => ({
+    code: row.id,
+    label: row.name,
+    color: MARKETPLACE_CHART_COLORS[row.code] ?? "#9ca3af",
   }));
   function buildAllScopeBar(byScopeMonth: Map<string, Map<string, number>>, key: string) {
-    const segments = marketplaceCodes.map((code) => ({
-      code,
-      label: marketplaceNameByCode.get(code) ?? code,
-      value: byScopeMonth.get(code)?.get(key) ?? 0,
-      color: MARKETPLACE_CHART_COLORS[code] ?? "#9ca3af",
+    const segments = marketplaceRows.map((row) => ({
+      code: row.id,
+      label: row.name,
+      value: byScopeMonth.get(row.id)?.get(key) ?? 0,
+      color: MARKETPLACE_CHART_COLORS[row.code] ?? "#9ca3af",
     }));
     const value = segments.reduce((sum, s) => sum + s.value, 0);
     return { label: monthLabelFromKey(key), value, segments };
@@ -1125,16 +1142,16 @@ async function AnalyticsPageContent() {
       revenue: chartMonthKeys.map((key) => buildAllScopeBar(revenueByScopeMonth, key)),
       qty: chartMonthKeys.map((key) => buildAllScopeBar(qtyByScopeMonth, key)),
     },
-    ...marketplaceCodes.map((code) => ({
-      code,
-      label: marketplaceNameByCode.get(code) ?? code,
+    ...marketplaceRows.map((row) => ({
+      code: row.id,
+      label: row.name,
       revenue: chartMonthKeys.map((key) => ({
         label: monthLabelFromKey(key),
-        value: revenueByScopeMonth.get(code)?.get(key) ?? 0,
+        value: revenueByScopeMonth.get(row.id)?.get(key) ?? 0,
       })),
       qty: chartMonthKeys.map((key) => ({
         label: monthLabelFromKey(key),
-        value: qtyByScopeMonth.get(code)?.get(key) ?? 0,
+        value: qtyByScopeMonth.get(row.id)?.get(key) ?? 0,
       })),
     })),
   ];
@@ -1149,12 +1166,12 @@ async function AnalyticsPageContent() {
       legend: chartLegend,
       data: chartMonthKeys.map((key) => buildAllScopeBar(profitByScopeMonth, key)),
     },
-    ...marketplaceCodes.map((code) => ({
-      code,
-      label: marketplaceNameByCode.get(code) ?? code,
+    ...marketplaceRows.map((row) => ({
+      code: row.id,
+      label: row.name,
       data: chartMonthKeys.map((key) => ({
         label: monthLabelFromKey(key),
-        value: profitByScopeMonth.get(code)?.get(key) ?? 0,
+        value: profitByScopeMonth.get(row.id)?.get(key) ?? 0,
       })),
     })),
   ];
@@ -1166,11 +1183,11 @@ async function AnalyticsPageContent() {
   // последний расчёт).
   const returnsAgg = new Map<string, { returns: number; sold: number }>();
   for (const ue of latestUeByProductMarketplace.values()) {
-    if (!ue.marketplace) continue;
-    const agg = returnsAgg.get(ue.marketplace) ?? { returns: 0, sold: 0 };
+    if (!ue.marketplaceId) continue;
+    const agg = returnsAgg.get(ue.marketplaceId) ?? { returns: 0, sold: 0 };
     agg.returns += ue.returnsQty;
     agg.sold += Number((ue.details as Record<string, unknown> | null)?.quantitySold ?? 0);
-    returnsAgg.set(ue.marketplace, agg);
+    returnsAgg.set(ue.marketplaceId, agg);
   }
   // Отказы (невыкуп заказов) — реальные данные есть только у WB (buybackPct
   // в юнит-экономике, из заказов WB API — см. sync-wb). У Ozon/Яндекса такого
@@ -1186,15 +1203,14 @@ async function AnalyticsPageContent() {
     wbRefusalWeight += weight;
   }
   const wbRefusalPct = wbRefusalWeight > 0 ? Math.round((wbRefusalWeightedSum / wbRefusalWeight) * 100) / 100 : null;
-  // Короткие подписи для этого графика — полные названия площадок
-  // ("Яндекс.Маркет: возврат") при повороте не помещались и обрезались.
-  const SHORT_MARKETPLACE_LABEL: Record<string, string> = { WB: "WB", OZON: "Ozon", YANDEX_MARKET: "Яндекс" };
+  // Короткие подписи для этого графика — полное название магазина
+  // ("Яндекс.Маркет: возврат") при повороте не помещалось и обрезалось.
   const returnsRefusalsChartData: ChartBar[] = [
-    ...marketplaceCodes.map((code) => {
-      const agg = returnsAgg.get(code);
+    ...marketplaceRows.map((row) => {
+      const agg = returnsAgg.get(row.id);
       const denom = agg ? agg.sold + agg.returns : 0;
       const pct = agg && denom > 0 ? Math.round((agg.returns / denom) * 10000) / 100 : 0;
-      return { label: `${SHORT_MARKETPLACE_LABEL[code] ?? code} возврат`, value: pct };
+      return { label: `${row.name} возврат`, value: pct };
     }),
     ...(wbRefusalPct !== null ? [{ label: "WB отказ", value: wbRefusalPct }] : []),
   ];
@@ -1230,28 +1246,28 @@ async function AnalyticsPageContent() {
       label: "Все площадки",
       ...computeTopMovers(crossProductIds, (productId, m) => qtyByProductMonthAll.get(`${productId}|${m.year}-${m.month}`) ?? 0),
     },
-    ...marketplaceCodes.map((code) => {
+    ...marketplaceRows.map((row) => {
       const productIds = new Set(
-        monthlyTrendRows.filter((m) => marketplaceCodeById.get(m.marketplaceId) === code).map((m) => m.productId)
+        monthlyTrendRows.filter((m) => m.marketplaceId === row.id).map((m) => m.productId)
       );
       return {
-        code,
-        label: marketplaceNameByCode.get(code) ?? code,
+        code: row.id,
+        label: row.name,
         ...computeTopMovers(
           productIds,
-          (productId, m) => qtyByProductMarketplaceMonth.get(`${productId}|${code}|${m.year}-${m.month}`) ?? 0
+          (productId, m) => qtyByProductMarketplaceMonth.get(`${productId}|${row.id}|${m.year}-${m.month}`) ?? 0
         ),
       };
     }),
   ];
 
-  // Сводка ABC по площадкам — переиспользует buildAbcRows(code), ту же
-  // функцию, что и детальная вкладка ABC внутри раздела каждой площадки.
-  const abcSummaryRows = marketplaceCodes.map((code) => {
-    const abcRowsForCode = buildAbcRows(code);
+  // Сводка ABC по магазинам — переиспользует buildAbcRows(marketplaceId), ту
+  // же функцию, что и детальная вкладка ABC внутри раздела каждого магазина.
+  const abcSummaryRows = marketplaceRows.map((row) => {
+    const abcRowsForCode = buildAbcRows(row.id);
     return {
-      id: code,
-      marketplace: marketplaceNameByCode.get(code) ?? code,
+      id: row.id,
+      marketplace: row.name,
       aCount: abcRowsForCode.filter((r) => r.tier === "A").length,
       bCount: abcRowsForCode.filter((r) => r.tier === "B").length,
       cCount: abcRowsForCode.filter((r) => r.tier === "C").length,
@@ -1274,18 +1290,22 @@ async function AnalyticsPageContent() {
     OZON: "rgba(0, 105, 255, 0.12)", // синий
     YANDEX_MARKET: "rgba(245, 197, 24, 0.12)", // жёлтый
   };
-  // ABC/XYZ по каждой площадке — считаем один раз на площадку (не на
-  // строку), те же функции, что и в детальной вкладке ABC-анализ каждой
-  // площадки (buildAbcRows/xyzTierFor).
+  // ABC/XYZ по каждому магазину — считаем один раз на магазин (не на
+  // строку), те же функции, что и в детальной вкладке ABC-анализ каждого
+  // магазина (buildAbcRows/xyzTierFor). Ключ — marketplaceId, чтобы два
+  // магазина одного кода (напр. Ozon/Ozon 2) сравнивались как отдельные
+  // колонки, а не сливались в одну.
   const abcTierByCodeAndProduct = new Map<string, Map<string, "A" | "B" | "C">>();
-  for (const code of marketplaceCodes) {
-    abcTierByCodeAndProduct.set(code, new Map(buildAbcRows(code).map((r) => [r.id, r.tier])));
+  for (const row of marketplaceRows) {
+    abcTierByCodeAndProduct.set(row.id, new Map(buildAbcRows(row.id).map((r) => [r.id, r.tier])));
   }
   // Короткие подписи для заголовков колонок этой таблицы — с полными
-  // названиями площадок ("Яндекс.Маркет: Профит, ₽" и т.п.) текст в узких
+  // названиями магазинов ("Яндекс.Маркет: Профит, ₽" и т.п.) текст в узких
   // колонках не помещался и был нечитаем. В description (подсказка при
-  // наведении) по-прежнему используем полное название.
-  const SHORT_MP_LABEL: Record<string, string> = { WB: "WB", OZON: "Ozon", YANDEX_MARKET: "ЯМ" };
+  // наведении) по-прежнему используем полное название. Для известных кодов
+  // берём короткий брендовый ярлык, для остальных (напр. "Ozon 2") — само
+  // название магазина.
+  const SHORT_CODE_LABEL: Record<string, string> = { WB: "WB", OZON: "Ozon", YANDEX_MARKET: "ЯМ" };
   // Раньше рядом с текстом в заголовке была ещё кнопка "закрепить
   // сортировку" — её убрали (см. SortableTh), поэтому колонкам больше не
   // нужен запас под неё, можно держать их по-настоящему узкими.
@@ -1294,20 +1314,21 @@ async function AnalyticsPageContent() {
     { key: "sku", label: "SKU", type: "string", description: "Внутренний SKU товара в CRM", width: 110, noWrap: true },
     { key: "name", label: "Товар", type: "string", description: "Название товара", width: 260 },
     { key: "cogsRub", label: "Себест", type: "number", description: "Себестоимость 1 шт, ₽ — одна на товар, не зависит от площадки (берётся с той площадки, где посчитана последней)", width: 60, noWrap: true },
-    ...marketplaceCodes.flatMap((code): SortableColumn[] => {
-      const label = marketplaceNameByCode.get(code) ?? code;
-      const shortLabel = SHORT_MP_LABEL[code] ?? label;
+    ...marketplaceRows.flatMap((mpRow): SortableColumn[] => {
+      const label = mpRow.name;
+      const shortLabel = marketplaceRows.filter((r) => r.code === mpRow.code).length > 1 ? label : (SHORT_CODE_LABEL[mpRow.code] ?? label);
       // Заголовки без знаков препинания и без ₽/× — только 2 слова, ровно 2
       // строки без переносов внутри строки (единица измерения — в подсказке
       // при наведении, не в самом заголовке).
-      const bg = MARKETPLACE_COL_BG[code];
+      const bg = MARKETPLACE_COL_BG[mpRow.code];
+      const id = mpRow.id;
       return [
-        { key: `price_${code}`, label: `${shortLabel} Цена`, type: "number", description: `Цена продажи на ${label}, ₽ — из последнего расчёта юнит-экономики, тот же расчёт и период, что и у остальных колонок этой площадки в этой же строке (специально не берём отдельную "среднюю цену" из синка остатков — она считается по другому отчёту за другое окно и может не биться с остальными колонками)`, width: 78, bg, noWrap: true },
-        { key: `payout_${code}`, label: `${shortLabel} Выплата`, type: "number", description: `Сколько реально перечисляет ${label} с 1 шт после своих удержаний, ₽ (комиссия, логистика, эквайринг и т.д.) — из последнего расчёта юнит-экономики. Не то же самое, что Профит: тут ещё не вычтены налог и себестоимость`, width: 74, bg, noWrap: true },
-        { key: `profit_${code}`, label: `${shortLabel} Профит`, type: "number", description: `Выплата от ${label} минус налог (6% с выплаты, УСН «доходы») минус себестоимость, ₽ — то же самое, что столбец «Профит» на «Юнит-экономике», в разрезе этой площадки`, width: 70, bg, noWrap: true },
-        { key: `roas_${code}`, label: `${shortLabel} ROAS`, type: "number", description: `Выручка на 1 ₽ рекламы на ${label}, × — пусто, если рекламу не показывали`, width: 54, bg, noWrap: true },
-        { key: `abc_${code}`, label: `${shortLabel} ABC`, type: "string", description: `Группа по вкладу в выручку на ${label} (см. вкладку «ABC-анализ» этой площадки): A — первые 80% накопленной выручки, B — следующие 15%, C — остальные 5%`, width: 52, bg, noWrap: true },
-        { key: `xyz_${code}`, label: `${shortLabel} XYZ`, type: "string", description: `Стабильность спроса на ${label} по последним 6 месяцам: X — ровно (≤10%), Y — умеренно (10-25%), Z — скачками (>25%). Пусто — меньше 3 месяцев истории`, width: 52, bg, noWrap: true },
+        { key: `price_${id}`, label: `${shortLabel} Цена`, type: "number", description: `Цена продажи на ${label}, ₽ — из последнего расчёта юнит-экономики, тот же расчёт и период, что и у остальных колонок этого магазина в этой же строке (специально не берём отдельную "среднюю цену" из синка остатков — она считается по другому отчёту за другое окно и может не биться с остальными колонками)`, width: 78, bg, noWrap: true },
+        { key: `payout_${id}`, label: `${shortLabel} Выплата`, type: "number", description: `Сколько реально перечисляет ${label} с 1 шт после своих удержаний, ₽ (комиссия, логистика, эквайринг и т.д.) — из последнего расчёта юнит-экономики. Не то же самое, что Профит: тут ещё не вычтены налог и себестоимость`, width: 74, bg, noWrap: true },
+        { key: `profit_${id}`, label: `${shortLabel} Профит`, type: "number", description: `Выплата от ${label} минус налог (6% с выплаты, УСН «доходы») минус себестоимость, ₽ — то же самое, что столбец «Профит» на «Юнит-экономике», в разрезе этого магазина`, width: 70, bg, noWrap: true },
+        { key: `roas_${id}`, label: `${shortLabel} ROAS`, type: "number", description: `Выручка на 1 ₽ рекламы на ${label}, × — пусто, если рекламу не показывали`, width: 54, bg, noWrap: true },
+        { key: `abc_${id}`, label: `${shortLabel} ABC`, type: "string", description: `Группа по вкладу в выручку на ${label} (см. вкладку «ABC-анализ» этого магазина): A — первые 80% накопленной выручки, B — следующие 15%, C — остальные 5%`, width: 52, bg, noWrap: true },
+        { key: `xyz_${id}`, label: `${shortLabel} XYZ`, type: "string", description: `Стабильность спроса на ${label} по последним 6 месяцам: X — ровно (≤10%), Y — умеренно (10-25%), Z — скачками (>25%). Пусто — меньше 3 месяцев истории`, width: 52, bg, noWrap: true },
       ];
     }),
     { key: "profitGapRub", label: "Разброс профита", type: "number", description: "Разница между лучшим и худшим профитом с 1 шт этого товара среди площадок, где есть данные, ₽ — чем больше, тем сильнее стоит присмотреться к худшей площадке", width: 74, noWrap: true },
@@ -1324,25 +1345,26 @@ async function AnalyticsPageContent() {
     }
     const result: Record<string, unknown>[] = [];
     for (const [productId, list] of byProduct) {
-      const codesPresent = new Set(list.map((r) => r.marketplaceCode));
-      if (codesPresent.size < 2) continue;
+      const marketplaceIdsPresent = new Set(list.map((r) => r.marketplaceId));
+      if (marketplaceIdsPresent.size < 2) continue;
       const product = productById.get(productId);
       if (!product) continue;
 
       const row: Record<string, unknown> = { id: productId, sku: product.sku, name: product.name, photoUrl: product.photoUrl };
       // Себестоимость не зависит от площадки — одна и та же закупочная цена
-      // товара, просто посчитана в юнит-экономике каждой площадки отдельно.
-      // Берём первое найденное значение (по порядку marketplaceCodes), а не
+      // товара, просто посчитана в юнит-экономике каждого магазина отдельно.
+      // Берём первое найденное значение (по порядку marketplaceRows), а не
       // складываем/усредняем — это не сумма, а один и тот же факт.
       row.cogsRub = list.find((x) => x.cogsRub !== null)?.cogsRub ?? null;
       let maxProfit: number | null = null;
       let minProfit: number | null = null;
       let bestCode: string | null = null;
       let worstCode: string | null = null;
-      for (const code of marketplaceCodes) {
-        const r = list.find((x) => x.marketplaceCode === code);
+      for (const mpRow of marketplaceRows) {
+        const code = mpRow.id;
+        const r = list.find((x) => x.marketplaceId === mpRow.id);
         // sellPriceRub (юнит-экономика), а не avgPriceRub (синк остатков) —
-        // тот же расчёт и период, что и у остальных колонок этой площадки,
+        // тот же расчёт и период, что и у остальных колонок этого магазина,
         // иначе цифры по разным колонкам не биваются друг с другом (см.
         // разбор бага: avgPriceRub из другого отчёта WB за другое окно мог
         // оказаться даже НИЖЕ выплаты, хотя выплата всегда меньше цены).
@@ -1368,13 +1390,13 @@ async function AnalyticsPageContent() {
         }
       }
       row.profitGapRub = maxProfit !== null && minProfit !== null ? Math.round((maxProfit - minProfit) * 100) / 100 : null;
-      row.bestPlatform = bestCode ? marketplaceNameByCode.get(bestCode) ?? bestCode : "—";
-      // Коды (не только отображаемые названия) — нужны вкладке "Рекомендации"
-      // ниже, чтобы достать конкретные price_/payout_/roas_ худшей/лучшей
-      // площадки и собрать из них человеческий текст рекомендации.
+      row.bestPlatform = bestCode ? marketplaceNameById.get(bestCode) ?? bestCode : "—";
+      // Marketplace ID (не только отображаемые названия) — нужны вкладке
+      // "Рекомендации" ниже, чтобы достать конкретные price_/payout_/roas_
+      // худшего/лучшего магазина и собрать из них человеческий текст рекомендации.
       row.bestPlatformCode = bestCode;
       row.worstPlatformCode = worstCode;
-      row.worstPlatform = worstCode ? marketplaceNameByCode.get(worstCode) ?? worstCode : "—";
+      row.worstPlatform = worstCode ? marketplaceNameById.get(worstCode) ?? worstCode : "—";
       // Приоритетный кандидат — товар реально значимый (A/B по вкладу в
       // выручку ХОТЯ БЫ НА ОДНОЙ площадке — ABC считается от выручки, а
       // "лучшая площадка" здесь — от прибыли, это разные рейтинги, поэтому
@@ -1386,8 +1408,8 @@ async function AnalyticsPageContent() {
       //    или её вообще не было).
       // Раньше требовались ОБА условия сразу — это почти никогда не
       // выполнялось (см. разбор с пользователем), сузили до одной из причин.
-      const tiersPresent = marketplaceCodes
-        .map((code) => row[`abc_${code}`])
+      const tiersPresent = marketplaceRows
+        .map((mpRow) => row[`abc_${mpRow.id}`])
         .filter((t): t is "A" | "B" | "C" => t === "A" || t === "B" || t === "C");
       const bestTierAnyPlatform = tiersPresent.includes("A") ? "A" : tiersPresent.includes("B") ? "B" : tiersPresent[0] ?? null;
       const isSignificant = bestTierAnyPlatform === "A" || bestTierAnyPlatform === "B";
@@ -1475,9 +1497,9 @@ async function AnalyticsPageContent() {
 
   function buildProductIssues(productId: string, listings: typeof perListingRows, marketplaceFilter?: string): Issue[] {
     const issues: Issue[] = [];
-    const scoped = marketplaceFilter ? listings.filter((r) => r.marketplaceCode === marketplaceFilter) : listings;
+    const scoped = marketplaceFilter ? listings.filter((r) => r.marketplaceId === marketplaceFilter) : listings;
     for (const r of scoped) {
-      const mp = marketplaceNameByCode.get(r.marketplaceCode) ?? r.marketplaceCode;
+      const mp = marketplaceNameById.get(r.marketplaceId) ?? r.marketplaceCode;
       if (r.needsReorder) {
         issues.push({
           severity: "critical",
@@ -1542,7 +1564,7 @@ async function AnalyticsPageContent() {
   ) {
     const entries = marketplaceFilter
       ? [...listingsByProductForRecs.entries()].filter(([, listings]) =>
-          listings.some((l) => l.marketplaceCode === marketplaceFilter)
+          listings.some((l) => l.marketplaceId === marketplaceFilter)
         )
       : [...listingsByProductForRecs.entries()];
     return entries
@@ -1580,12 +1602,12 @@ async function AnalyticsPageContent() {
 
   function buildProductOpportunities(productId: string, listings: typeof perListingRows, marketplaceFilter?: string): Opportunity[] {
     const opportunities: Opportunity[] = [];
-    const sellingCodes = new Set<string>();
-    const scoped = marketplaceFilter ? listings.filter((r) => r.marketplaceCode === marketplaceFilter) : listings;
+    const sellingMarketplaceIds = new Set<string>();
+    const scoped = marketplaceFilter ? listings.filter((r) => r.marketplaceId === marketplaceFilter) : listings;
     for (const r of scoped) {
-      const mp = marketplaceNameByCode.get(r.marketplaceCode) ?? r.marketplaceCode;
-      const tier = abcTierByCodeAndProduct.get(r.marketplaceCode)?.get(productId);
-      if (r.avgDailySalesQty > 0) sellingCodes.add(r.marketplaceCode);
+      const mp = marketplaceNameById.get(r.marketplaceId) ?? r.marketplaceCode;
+      const tier = abcTierByCodeAndProduct.get(r.marketplaceId)?.get(productId);
+      if (r.avgDailySalesQty > 0) sellingMarketplaceIds.add(r.marketplaceId);
       if (tier === "A") {
         opportunities.push({ severity: "top", text: `Топ по выручке на ${mp} (ABC-A) — следите за остатком, не допускайте обнуления склада` });
       }
@@ -1602,11 +1624,12 @@ async function AnalyticsPageContent() {
         opportunities.push({ severity: "growth", text: `Продажи растут: +${trendPct}% за последний месяц (все площадки вместе) — увеличьте объём следующего заказа, чтобы не упустить рост` });
       }
       const isProvenTop = opportunities.some((o) => o.severity === "top");
-      if (isProvenTop && sellingCodes.size > 0) {
-        const missingCodes = marketplaceCodes.filter((c) => !sellingCodes.has(c));
-        if (missingCodes.length > 0) {
-          const missingNames = missingCodes.map((c) => marketplaceNameByCode.get(c) ?? c).join(" и ");
-          opportunities.push({ severity: "growth", text: `Хорошо продаётся, но только на ${[...sellingCodes].map((c) => marketplaceNameByCode.get(c) ?? c).join(" и ")} — стоит попробовать вывести на ${missingNames}` });
+      if (isProvenTop && sellingMarketplaceIds.size > 0) {
+        const missingRows = marketplaceRows.filter((r) => !sellingMarketplaceIds.has(r.id));
+        if (missingRows.length > 0) {
+          const missingNames = missingRows.map((r) => r.name).join(" и ");
+          const sellingNames = marketplaceRows.filter((r) => sellingMarketplaceIds.has(r.id)).map((r) => r.name).join(" и ");
+          opportunities.push({ severity: "growth", text: `Хорошо продаётся, но только на ${sellingNames} — стоит попробовать вывести на ${missingNames}` });
         }
       }
     }
@@ -1615,14 +1638,14 @@ async function AnalyticsPageContent() {
 
   const opportunityRows = buildRankedRows((id, l) => buildProductOpportunities(id, l), OPPORTUNITY_SEVERITY_RANK, "top");
 
-  function buildMarketplaceRecRows(code: string) {
+  function buildMarketplaceRecRows(marketplaceId: string) {
     return {
-      issueRows: buildRankedRows((id, l) => buildProductIssues(id, l, code), SEVERITY_RANK, "critical", code),
+      issueRows: buildRankedRows((id, l) => buildProductIssues(id, l, marketplaceId), SEVERITY_RANK, "critical", marketplaceId),
       opportunityRows: buildRankedRows(
-        (id, l) => buildProductOpportunities(id, l, code),
+        (id, l) => buildProductOpportunities(id, l, marketplaceId),
         OPPORTUNITY_SEVERITY_RANK,
         "top",
-        code
+        marketplaceId
       ),
     };
   }
@@ -1639,14 +1662,14 @@ async function AnalyticsPageContent() {
     growth: 4,
     info: 5,
   };
-  function buildCombinedMarketplaceRows(code: string) {
+  function buildCombinedMarketplaceRows(marketplaceId: string) {
     const entries = [...listingsByProductForRecs.entries()].filter(([, listings]) =>
-      listings.some((l) => l.marketplaceCode === code)
+      listings.some((l) => l.marketplaceId === marketplaceId)
     );
     return entries
       .map(([productId, listings]) => {
         const product = productById.get(productId);
-        const combined = [...buildProductIssues(productId, listings, code), ...buildProductOpportunities(productId, listings, code)].sort(
+        const combined = [...buildProductIssues(productId, listings, marketplaceId), ...buildProductOpportunities(productId, listings, marketplaceId)].sort(
           (a, b) => (COMBINED_SEVERITY_RANK[a.severity] ?? 6) - (COMBINED_SEVERITY_RANK[b.severity] ?? 6)
         );
         const worstSeverity = combined.reduce((min, i) => Math.min(min, COMBINED_SEVERITY_RANK[i.severity] ?? 6), 6);
@@ -1672,10 +1695,10 @@ async function AnalyticsPageContent() {
   // "Рекомендации" (когда проваливаемся в WB/Ozon/ЯМ), и внутри собственного
   // раздела площадки (её под-вкладка "Рекомендации") — те же данные, тот же
   // набор вкладок, чтобы не расходились между собой.
-  function buildMarketplaceRecommendationTabs(code: string) {
-    const { issueRows, opportunityRows: oppRows } = buildMarketplaceRecRows(code);
-    const combinedRows = buildCombinedMarketplaceRows(code);
-    const codeReorderCount = reorderAllRows.filter((r) => r.marketplaceCode === code).length;
+  function buildMarketplaceRecommendationTabs(mpRow: { id: string; code: string; name: string }) {
+    const { issueRows, opportunityRows: oppRows } = buildMarketplaceRecRows(mpRow.id);
+    const combinedRows = buildCombinedMarketplaceRows(mpRow.id);
+    const codeReorderCount = reorderAllRows.filter((r) => r.marketplaceId === mpRow.id).length;
     const combinedFlaggedCount = combinedRows.filter((r) => r.totalCount > 0).length;
     const oppFlaggedCount = oppRows.filter((r) => r.totalCount > 0).length;
     const issueFlaggedCount = issueRows.filter((r) => r.totalCount > 0).length;
@@ -1698,7 +1721,7 @@ async function AnalyticsPageContent() {
       {
         key: "reorder",
         label: `Пора заказывать (${codeReorderCount})`,
-        content: buildReorderTabContent(code),
+        content: buildReorderTabContent(mpRow.id),
       },
     ];
   }
@@ -1731,7 +1754,7 @@ async function AnalyticsPageContent() {
           sku: r.sku,
           name: r.name,
           photoUrl: r.photoUrl,
-          marketplace: marketplaceNameByCode.get(r.marketplaceCode) ?? r.marketplaceCode,
+          marketplace: marketplaceNameById.get(r.marketplaceId) ?? r.marketplaceCode,
           issues: issues.join(", "),
           qtyAvailable: r.qtyAvailable,
           avgDailySalesQty: r.avgDailySalesQty,
@@ -1743,10 +1766,10 @@ async function AnalyticsPageContent() {
   }
   const attentionScopes: AttentionScope[] = [
     { code: "ALL", label: "Все площадки", rows: computeAttentionRows(perListingRows) },
-    ...marketplaceCodes.map((code) => ({
-      code,
-      label: marketplaceNameByCode.get(code) ?? code,
-      rows: computeAttentionRows(perListingRows.filter((r) => r.marketplaceCode === code)),
+    ...marketplaceRows.map((row) => ({
+      code: row.id,
+      label: row.name,
+      rows: computeAttentionRows(perListingRows.filter((r) => r.marketplaceId === row.id)),
     })),
   ];
 
@@ -1875,7 +1898,7 @@ async function AnalyticsPageContent() {
   // переключаться между WB/Ozon/Яндекс, чтобы увидеть полную картину закупок.
   const reorderAllRows = perListingRows
     .filter((r) => r.needsReorder)
-    .map((r) => ({ ...r, marketplace: marketplaceNameByCode.get(r.marketplaceCode) ?? r.marketplaceCode }))
+    .map((r) => ({ ...r, marketplace: marketplaceNameById.get(r.marketplaceId) ?? r.marketplaceCode }))
     .sort((a, b) => (a.daysOfStockLeft ?? Infinity) - (b.daysOfStockLeft ?? Infinity));
 
   const reorderAllColumns: SortableColumn[] = [
@@ -1932,16 +1955,16 @@ async function AnalyticsPageContent() {
   // объединены, чтобы не задваивать форму заказа), и в виде на одну
   // конкретную площадку (code задан — там задвоения productId в принципе
   // не бывает, т.к. в perListingRows один ряд на пару товар+площадка).
-  function buildReorderTabContent(code?: string) {
-    const rowsForTable = code ? reorderAllRows.filter((r) => r.marketplaceCode === code) : reorderAllRows;
+  function buildReorderTabContent(marketplaceId?: string) {
+    const rowsForTable = marketplaceId ? reorderAllRows.filter((r) => r.marketplaceId === marketplaceId) : reorderAllRows;
     if (rowsForTable.length === 0) {
       return (
         <p className="muted">
-          Нет товаров, которым срочно нужна новая поставка{code ? ` на ${marketplaceNameByCode.get(code) ?? code}` : ""}.
+          Нет товаров, которым срочно нужна новая поставка{marketplaceId ? ` на ${marketplaceNameById.get(marketplaceId) ?? marketplaceId}` : ""}.
         </p>
       );
     }
-    const orderRows = code
+    const orderRows = marketplaceId
       ? rowsForTable.map((r) => ({
           productId: r.productId,
           sku: r.sku,
@@ -1957,13 +1980,13 @@ async function AnalyticsPageContent() {
     return (
       <>
         <p className="muted">
-          {code
-            ? `Ниже минимального покрытия (${TARGET_COVERAGE_DAYS} дней вперёд, с учётом остатка, того, что уже едет, и сезонности) на ${marketplaceNameByCode.get(code) ?? code}.`
+          {marketplaceId
+            ? `Ниже минимального покрытия (${TARGET_COVERAGE_DAYS} дней вперёд, с учётом остатка, того, что уже едет, и сезонности) на ${marketplaceNameById.get(marketplaceId) ?? marketplaceId}.`
             : `Ниже минимального покрытия (${TARGET_COVERAGE_DAYS} дней вперёд, с учётом остатка, того, что уже едет, и сезонности) — сразу по всем площадкам. Один товар может встретиться несколько раз, если ему пора заказывать на нескольких площадках одновременно.`}
         </p>
         <div className="table-scroll">
           <SortableTable
-            columns={code ? reorderColumnsScoped : reorderAllColumns}
+            columns={marketplaceId ? reorderColumnsScoped : reorderAllColumns}
             rows={rowsForTable}
             rowKey="id"
             defaultSortKey="daysOfStockLeft"
@@ -2009,10 +2032,10 @@ async function AnalyticsPageContent() {
                 label: `Пора заказывать, все (${reorderAllRows.length})`,
                 content: buildReorderTabContent(),
               },
-              ...marketplaceCodes.map((code) => ({
-                key: code,
-                label: marketplaceNameByCode.get(code) ?? code,
-                content: <AnalyticsTabs tabs={buildMarketplaceRecommendationTabs(code)} />,
+              ...marketplaceRows.map((row) => ({
+                key: row.id,
+                label: row.name,
+                content: <AnalyticsTabs tabs={buildMarketplaceRecommendationTabs(row)} />,
               })),
             ]}
           />
@@ -2032,7 +2055,7 @@ async function AnalyticsPageContent() {
           buildDashboardSection(),
           buildRecommendationsSection(),
           buildCrossMarketplaceSection(),
-          ...marketplaceCodes.map((code) => buildMarketplaceSection(code)),
+          ...marketplaceRows.map((row) => buildMarketplaceSection(row)),
         ]}
       />
     </div>

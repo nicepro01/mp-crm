@@ -35,6 +35,7 @@ async function POSTContent(req: NextRequest) {
         companyId: getCurrentCompanyId(),
         productId: data.productId,
         marketplace: data.marketplace || null,
+        marketplaceId: data.marketplaceId || null,
         periodMonth: new Date(`${data.periodMonth}-01T00:00:00.000Z`),
         cogsRub: data.cogsRub,
         inboundLogisticsRub: data.inboundLogisticsRub,

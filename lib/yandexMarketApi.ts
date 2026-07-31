@@ -19,19 +19,19 @@ export type YandexCredentials = {
   fbsCampaignId: string;
 };
 
-export async function getYandexCredentials(): Promise<YandexCredentials> {
-  const marketplace = await prisma.marketplace.findFirst({ where: { code: "YANDEX_MARKET" } });
-  const credentials = marketplace?.credentials as YandexCredentials | null | undefined;
+export async function getYandexCredentials(marketplaceId: string): Promise<YandexCredentials> {
+  const marketplace = await prisma.marketplace.findUniqueOrThrow({ where: { id: marketplaceId } });
+  const credentials = marketplace.credentials as YandexCredentials | null | undefined;
   if (!credentials?.token || !credentials?.businessId || !credentials?.fbyCampaignId || !credentials?.fbsCampaignId) {
     throw new Error(
-      "Данные Яндекс.Маркета не настроены — заполните токен, businessId и ID кампаний FBY/FBS в «Настройки → Интеграции»"
+      `Данные Яндекс.Маркета не настроены для «${marketplace.name}» — заполните токен, businessId и ID кампаний FBY/FBS в «Настройки → Интеграции»`
     );
   }
   return credentials;
 }
 
-async function yandexHeaders() {
-  const { token } = await getYandexCredentials();
+async function yandexHeaders(marketplaceId: string) {
+  const { token } = await getYandexCredentials(marketplaceId);
   return {
     "Api-Key": token,
     "Content-Type": "application/json",
@@ -57,7 +57,7 @@ type CampaignWarehouseStock = { warehouseId: number; offerId: string; qty: numbe
 /** Остатки кампании, БЕЗ свёртки по складам — нужно и для общего числа (см.
  * fetchYandexMarketStocks), и для разбивки по конкретному складу (см.
  * fetchYandexMarketStockByWarehouse). */
-async function fetchCampaignStocksByWarehouse(campaignId: string): Promise<CampaignWarehouseStock[]> {
+async function fetchCampaignStocksByWarehouse(marketplaceId: string, campaignId: string): Promise<CampaignWarehouseStock[]> {
   const rows: CampaignWarehouseStock[] = [];
   let pageToken: string | undefined;
 
@@ -66,7 +66,7 @@ async function fetchCampaignStocksByWarehouse(campaignId: string): Promise<Campa
       `${YANDEX_MARKET_BASE_URL}/campaigns/${campaignId}/offers/stocks`,
       {
         method: "POST",
-        headers: await yandexHeaders(),
+        headers: await yandexHeaders(marketplaceId),
         body: JSON.stringify(pageToken ? { page_token: pageToken } : {}),
       }
     );
@@ -104,11 +104,11 @@ export type YandexMarketStockRow = {
 };
 
 /** Тянет остатки по FBY (наш "FBO") и FBS кампаниям, сводит по артикулу продавца. */
-export async function fetchYandexMarketStocks(): Promise<YandexMarketStockRow[]> {
-  const { fbyCampaignId, fbsCampaignId } = await getYandexCredentials();
+export async function fetchYandexMarketStocks(marketplaceId: string): Promise<YandexMarketStockRow[]> {
+  const { fbyCampaignId, fbsCampaignId } = await getYandexCredentials(marketplaceId);
   const [fboRows, fbsRows] = await Promise.all([
-    fetchCampaignStocksByWarehouse(fbyCampaignId),
-    fetchCampaignStocksByWarehouse(fbsCampaignId),
+    fetchCampaignStocksByWarehouse(marketplaceId, fbyCampaignId),
+    fetchCampaignStocksByWarehouse(marketplaceId, fbsCampaignId),
   ]);
   const fboByOffer = sumByOfferId(fboRows);
   const fbsByOffer = sumByOfferId(fbsRows);
@@ -129,8 +129,8 @@ export type YandexWarehouseStockRow = {
 
 type WarehouseListResponse = { result: { warehouses: { id: number; name: string }[] } };
 
-async function fetchYandexWarehouseNames(): Promise<Map<number, string>> {
-  const res = await fetch(`${YANDEX_MARKET_BASE_URL}/warehouses`, { headers: await yandexHeaders() });
+async function fetchYandexWarehouseNames(marketplaceId: string): Promise<Map<number, string>> {
+  const res = await fetch(`${YANDEX_MARKET_BASE_URL}/warehouses`, { headers: await yandexHeaders(marketplaceId) });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`Yandex Market API /warehouses вернул ${res.status}: ${text.slice(0, 300)}`);
@@ -145,12 +145,12 @@ async function fetchYandexWarehouseNames(): Promise<Map<number, string>> {
  * fetchYandexMarketSalesByWarehouse() ниже (через /orders, не через
  * рейт-лимитированный отчёт shows-sales).
  */
-export async function fetchYandexMarketStockByWarehouse(): Promise<YandexWarehouseStockRow[]> {
-  const { fbyCampaignId, fbsCampaignId } = await getYandexCredentials();
+export async function fetchYandexMarketStockByWarehouse(marketplaceId: string): Promise<YandexWarehouseStockRow[]> {
+  const { fbyCampaignId, fbsCampaignId } = await getYandexCredentials(marketplaceId);
   const [fboRows, fbsRows, warehouseNames] = await Promise.all([
-    fetchCampaignStocksByWarehouse(fbyCampaignId),
-    fetchCampaignStocksByWarehouse(fbsCampaignId),
-    fetchYandexWarehouseNames(),
+    fetchCampaignStocksByWarehouse(marketplaceId, fbyCampaignId),
+    fetchCampaignStocksByWarehouse(marketplaceId, fbsCampaignId),
+    fetchYandexWarehouseNames(marketplaceId),
   ]);
 
   const byKey = new Map<string, YandexWarehouseStockRow>();
@@ -186,6 +186,7 @@ function formatYandexDate(d: Date): string {
  * 30 дней за один запрос (ограничение самого Yandex).
  */
 async function fetchCampaignOrdersByWarehouse(
+  marketplaceId: string,
   campaignId: string,
   dateFrom: Date,
   dateTo: Date
@@ -203,7 +204,7 @@ async function fetchCampaignOrdersByWarehouse(
     if (pageToken) params.set("page_token", pageToken);
 
     const res = await fetch(`${YANDEX_MARKET_BASE_URL}/campaigns/${campaignId}/orders?${params}`, {
-      headers: await yandexHeaders(),
+      headers: await yandexHeaders(marketplaceId),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -235,16 +236,16 @@ export type YandexWarehouseSalesRow = { vendorCode: string; warehouseName: strin
  * диапазон одного запроса) — если синку нужно окно шире, это отдельная
  * доработка (несколько последовательных запросов), сейчас не требуется.
  */
-export async function fetchYandexMarketSalesByWarehouse(windowDays: number): Promise<YandexWarehouseSalesRow[]> {
+export async function fetchYandexMarketSalesByWarehouse(marketplaceId: string, windowDays: number): Promise<YandexWarehouseSalesRow[]> {
   const dateTo = new Date();
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - windowDays);
 
-  const { fbyCampaignId, fbsCampaignId } = await getYandexCredentials();
+  const { fbyCampaignId, fbsCampaignId } = await getYandexCredentials(marketplaceId);
   const [fboItems, fbsItems, warehouseNames] = await Promise.all([
-    fetchCampaignOrdersByWarehouse(fbyCampaignId, dateFrom, dateTo),
-    fetchCampaignOrdersByWarehouse(fbsCampaignId, dateFrom, dateTo),
-    fetchYandexWarehouseNames(),
+    fetchCampaignOrdersByWarehouse(marketplaceId, fbyCampaignId, dateFrom, dateTo),
+    fetchCampaignOrdersByWarehouse(marketplaceId, fbsCampaignId, dateFrom, dateTo),
+    fetchYandexWarehouseNames(marketplaceId),
   ]);
 
   const byKey = new Map<string, YandexWarehouseSalesRow>();
@@ -291,6 +292,7 @@ function sleep(ms: number) {
  * возвращает сырой Buffer (zip с JSON или xlsx — зависит от path/format).
  */
 async function generateAndDownloadReport(
+  marketplaceId: string,
   path: string,
   body: Record<string, unknown>,
   format?: "JSON"
@@ -298,7 +300,7 @@ async function generateAndDownloadReport(
   const url = `${YANDEX_MARKET_BASE_URL}/v2/reports/${path}/generate${format ? `?format=${format}` : ""}`;
   const genRes = await fetch(url, {
     method: "POST",
-    headers: await yandexHeaders(),
+    headers: await yandexHeaders(marketplaceId),
     body: JSON.stringify(body),
   });
   const genData: ReportGenerateResponse = await genRes.json();
@@ -314,7 +316,7 @@ async function generateAndDownloadReport(
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     await sleep(attempt === 0 ? Math.min(genData.result.estimatedGenerationTime, 15000) : 5000);
     const infoRes = await fetch(`${YANDEX_MARKET_BASE_URL}/v2/reports/info/${reportId}`, {
-      headers: await yandexHeaders(),
+      headers: await yandexHeaders(marketplaceId),
     });
     const infoData: ReportInfoResponse = await infoRes.json();
     if (!infoRes.ok || infoData.status !== "OK" || !infoData.result) {
@@ -346,16 +348,17 @@ async function generateAndDownloadReport(
  * ограничен 1 запросом генерации в 10 минут на бизнес — вызывать нечасто
  * (раз в сутки в фоновом синке).
  */
-export async function fetchYandexMarketMonthlySales(): Promise<YandexMarketMonthlySale[]> {
+export async function fetchYandexMarketMonthlySales(marketplaceId: string): Promise<YandexMarketMonthlySale[]> {
   const dateTo = new Date();
   dateTo.setDate(dateTo.getDate() - 1);
   const dateFrom = new Date(dateTo);
   dateFrom.setDate(dateFrom.getDate() - 89); // 90 дней — лимит без подписки
 
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  const { businessId } = await getYandexCredentials();
+  const { businessId } = await getYandexCredentials(marketplaceId);
 
   const buffer = await generateAndDownloadReport(
+    marketplaceId,
     "shows-sales",
     { businessId: Number(businessId), dateFrom: fmt(dateFrom), dateTo: fmt(dateTo), grouping: "OFFERS" },
     "JSON"
@@ -410,11 +413,12 @@ type RealizationJsonRow = {
  * это учтено явной паузой между FBY и FBS.
  */
 export async function fetchYandexGoodsRealization(
+  marketplaceId: string,
   campaignId: string,
   month: number,
   year: number
 ): Promise<YandexRealizationReport> {
-  const buffer = await generateAndDownloadReport("goods-realization", { campaignId: Number(campaignId), month, year }, "JSON");
+  const buffer = await generateAndDownloadReport(marketplaceId, "goods-realization", { campaignId: Number(campaignId), month, year }, "JSON");
 
   const JSZip = (await import("jszip")).default;
   const zip = await JSZip.loadAsync(buffer);
@@ -455,13 +459,14 @@ export async function fetchYandexGoodsRealization(
  * запас на то, что первый вызов сам уже съел десяток секунд на поллинг.
  */
 export async function fetchYandexGoodsRealizationBothCampaigns(
+  marketplaceId: string,
   month: number,
   year: number
 ): Promise<YandexRealizationReport> {
-  const { fbyCampaignId, fbsCampaignId } = await getYandexCredentials();
-  const fby = await fetchYandexGoodsRealization(fbyCampaignId, month, year);
+  const { fbyCampaignId, fbsCampaignId } = await getYandexCredentials(marketplaceId);
+  const fby = await fetchYandexGoodsRealization(marketplaceId, fbyCampaignId, month, year);
   await sleep(130_000);
-  const fbs = await fetchYandexGoodsRealization(fbsCampaignId, month, year);
+  const fbs = await fetchYandexGoodsRealization(marketplaceId, fbsCampaignId, month, year);
   return {
     delivered: [...fby.delivered, ...fbs.delivered],
     unredeemed: [...fby.unredeemed, ...fbs.unredeemed],
@@ -492,11 +497,12 @@ export type YandexServiceCostRow = {
  * данные, пропускаем.
  */
 export async function fetchYandexServicesReport(
+  marketplaceId: string,
   businessId: string,
   dateFrom: string,
   dateTo: string
 ): Promise<YandexServiceCostRow[]> {
-  const buffer = await generateAndDownloadReport("united-marketplace-services", {
+  const buffer = await generateAndDownloadReport(marketplaceId, "united-marketplace-services", {
     businessId: Number(businessId),
     dateFrom,
     dateTo,

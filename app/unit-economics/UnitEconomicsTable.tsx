@@ -13,11 +13,11 @@ export type UnitEconomicsRow = {
   name: string;
   photoUrl: string | null;
   marketplaceLabel: string;
-  // Код конкретной площадки этой строки (null — строка уже сама агрегат
+  // ID конкретного магазина этой строки (null — строка уже сама агрегат
   // "Общая"/заглушка без данных). Нужен, чтобы на вкладке "Общая" построить
-  // payoutByMarketplace ниже — там agg.marketplaceCode не совпадает 1:1 с
+  // payoutByMarketplace ниже — там agg.marketplaceId не совпадает 1:1 с
   // отображаемым marketplaceLabel (тот может быть склеен из нескольких).
-  marketplaceCode?: string | null;
+  marketplaceId?: string | null;
   period: string;
   cogsRub: number;
   mpCommissionRub: number;
@@ -54,11 +54,11 @@ export type UnitEconomicsRow = {
   buybackPct: number | null;
   returnsQty: number;
   payoutRub: number | null;
-  // Выплата от каждой конкретной площадки по этому товару — источник для
-  // колонки "Выплата" (см. payoutMarketplaceCodes на UnitEconomicsTable). На
-  // "Общей" показываются сразу все площадки (вместо одного взвешенного
-  // среднего payoutRub выше), на вкладке одной площадки — только она сама.
-  // Ключ — код площадки (WB/OZON/YANDEX_MARKET).
+  // Выплата от каждого конкретного магазина по этому товару — источник для
+  // колонки "Выплата" (см. payoutMarketplaces на UnitEconomicsTable). На
+  // "Общей" показываются сразу все магазины (вместо одного взвешенного
+  // среднего payoutRub выше), на вкладке одного магазина — только он сам.
+  // Ключ — marketplaceId (не код) — различает два магазина одной площадки.
   payoutByMarketplace?: Record<string, number | null>;
   // Всё остальное из исходного файла/API — то, что не поместилось в типовые
   // поля выше, но тоже реальные расходы/параметры расчёта. Ключи разные в
@@ -281,34 +281,21 @@ const detailFields: { key: keyof UnitEconomicsRow; label: string; suffix?: strin
   { key: "payoutRub", label: "К оплате поставщику" },
 ];
 
-// Полный справочник площадок для колонки "Выплата" — какие из них реально
-// показываются на конкретной вкладке, задаёт payoutMarketplaceCodes ниже
-// (см. UnitEconomicsRow.payoutByMarketplace).
-const PAYOUT_MARKETPLACE_LABELS: Record<string, string> = {
-  WB: "WB",
-  OZON: "Ozon",
-  YANDEX_MARKET: "Яндекс.М.",
-};
-
 export default function UnitEconomicsTable({
   rows,
   showActions = true,
-  payoutMarketplaceCodes = [],
+  payoutMarketplaces = [],
 }: {
   rows: UnitEconomicsRow[];
-  // На вкладке "Общая" строки — это агрегат по нескольким площадкам сразу,
+  // На вкладке "Общая" строки — это агрегат по нескольким магазинам сразу,
   // редактировать/удалять там нечего (нет одной конкретной записи в базе).
   showActions?: boolean;
-  // Какие площадки показать колонкой "Выплата" — на "Общей" все сразу
-  // (["WB","OZON","YANDEX_MARKET"]), на вкладке одной площадки — только она
-  // сама (иначе на вкладке WB были бы видны ещё и Ozon/Яндекс, что путает:
-  // это же вкладка именно WB). Пусто — колонок "Выплата" нет вообще.
-  payoutMarketplaceCodes?: string[];
+  // Какие магазины показать колонкой "Выплата" — на "Общей" все сразу, на
+  // вкладке одного магазина — только он сам (иначе на вкладке WB были бы
+  // видны ещё и Ozon/Яндекс, что путает). Пусто — колонок "Выплата" нет.
+  payoutMarketplaces?: { id: string; name: string }[];
 }) {
-  const payoutColumns = payoutMarketplaceCodes.map((code) => ({
-    code,
-    label: PAYOUT_MARKETPLACE_LABELS[code] ?? code,
-  }));
+  const payoutColumns = payoutMarketplaces.map((mp) => ({ code: mp.id, label: mp.name }));
   const { pinned, sortKey, sortDir, handleSort, togglePin } = useMultiSort<SortKey>("name");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 

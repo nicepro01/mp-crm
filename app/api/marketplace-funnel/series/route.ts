@@ -28,17 +28,18 @@ export async function GET(req: NextRequest) {
 
 async function GETContent(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const code = searchParams.get("code");
+  const marketplaceId = searchParams.get("marketplaceId");
   const rangeParam = searchParams.get("range") ?? "30";
 
-  if (code !== "WB" && code !== "OZON" && code !== "YANDEX_MARKET") {
-    return NextResponse.json({ error: "Некорректный код площадки" }, { status: 400 });
+  if (!marketplaceId) {
+    return NextResponse.json({ error: "Не передан marketplaceId" }, { status: 400 });
   }
 
-  const marketplace = await prisma.marketplace.findFirst({ where: { code } });
+  const marketplace = await prisma.marketplace.findUnique({ where: { id: marketplaceId } });
   if (!marketplace) {
-    return NextResponse.json({ code, granularity: "DAY", requestedRange: rangeParam, availableDays: 0, rows: [] });
+    return NextResponse.json({ marketplaceId, granularity: "DAY", requestedRange: rangeParam, availableDays: 0, rows: [] });
   }
+  const code = marketplace.code;
 
   if (rangeParam === "monthly") {
     // MONTH-строки как есть (сейчас пишет только Яндекс) + DAY-строки WB/Ozon,
@@ -113,7 +114,7 @@ async function GETContent(req: NextRequest) {
     }
 
     const rows = Array.from(byMonth.values()).sort((a, b) => a.periodStart.localeCompare(b.periodStart));
-    return NextResponse.json({ code, granularity: "MONTH", requestedRange: "monthly", availableDays: rows.length, rows });
+    return NextResponse.json({ marketplaceId, code, granularity: "MONTH", requestedRange: "monthly", availableDays: rows.length, rows });
   }
 
   const range = Number(rangeParam);
@@ -130,6 +131,7 @@ async function GETContent(req: NextRequest) {
   });
 
   return NextResponse.json({
+    marketplaceId,
     code,
     granularity: "DAY",
     requestedRange: range,

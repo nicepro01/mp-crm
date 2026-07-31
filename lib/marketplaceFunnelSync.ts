@@ -1,3 +1,4 @@
+import type { Marketplace } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getCurrentCompanyId } from "./tenantContext";
 import { fetchWbOrders } from "./wbApi";
@@ -101,15 +102,10 @@ async function upsertDayBuckets(marketplaceId: string, byDay: Map<string, DayBuc
  * синков накапливается больше реальной истории, чем можно получить одним
  * запросом.
  */
-export async function syncWbDailyFunnel() {
-  const marketplace = await prisma.marketplace.findFirst({ where: { code: "WB" } });
-  if (!marketplace) {
-    throw new Error("Площадка WB не найдена — сначала добавьте её на странице «Площадки»");
-  }
-
+export async function syncWbDailyFunnel(marketplace: Marketplace) {
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - ORDERS_WINDOW_DAYS);
-  const orders = await fetchWbOrders(dateFrom.toISOString().slice(0, 10));
+  const orders = await fetchWbOrders(marketplace.id, dateFrom.toISOString().slice(0, 10));
 
   const lagCutoff = new Date();
   lagCutoff.setDate(lagCutoff.getDate() - BUYOUT_LAG_DAYS);
@@ -143,12 +139,7 @@ export async function syncWbDailyFunnel() {
  * Ozon — новая функция (fetchOzonPostings), проверена частично на реальном
  * аккаунте (пагинация и корневые поля подтверждены), сумма (priceRub) — нет.
  */
-export async function syncOzonDailyFunnel(windowDays = 90) {
-  const marketplace = await prisma.marketplace.findFirst({ where: { code: "OZON" } });
-  if (!marketplace) {
-    throw new Error("Площадка Ozon не найдена — сначала добавьте её на странице «Площадки»");
-  }
-
+export async function syncOzonDailyFunnel(marketplace: Marketplace, windowDays = 90) {
   const dateTo = new Date();
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - windowDays);
@@ -159,8 +150,8 @@ export async function syncOzonDailyFunnel(windowDays = 90) {
   // площадок в этом проекте уже приводили к обрыву соединения (см. комментарий
   // в app/api/unit-economics/sync-wb/route.ts), придерживаемся того же
   // осторожного паттерна и для нового Ozon-эндпоинта.
-  const fbo = await fetchOzonPostings(dateFromIso, dateToIso, "fbo");
-  const fbs = await fetchOzonPostings(dateFromIso, dateToIso, "fbs");
+  const fbo = await fetchOzonPostings(marketplace.id, dateFromIso, dateToIso, "fbo");
+  const fbs = await fetchOzonPostings(marketplace.id, dateFromIso, dateToIso, "fbs");
   const postings = [...fbo, ...fbs];
 
   const byDay = new Map<string, DayBucket>();
@@ -194,13 +185,8 @@ export async function syncOzonDailyFunnel(windowDays = 90) {
  * orderedQty здесь = все уже РЕШЁННЫЕ заказы (delivered+unredeemed+returned) —
  * в отличие от WB/Ozon, у Яндекса нет сигнала "заказано, исход не известен".
  */
-export async function syncYandexMonthlyFunnel(month: number, year: number) {
-  const marketplace = await prisma.marketplace.findFirst({ where: { code: "YANDEX_MARKET" } });
-  if (!marketplace) {
-    throw new Error("Площадка Яндекс.Маркет не найдена — сначала добавьте её на странице «Площадки»");
-  }
-
-  const realization = await fetchYandexGoodsRealizationBothCampaigns(month, year);
+export async function syncYandexMonthlyFunnel(marketplace: Marketplace, month: number, year: number) {
+  const realization = await fetchYandexGoodsRealizationBothCampaigns(marketplace.id, month, year);
   const sumQty = (rows: { qty: number }[]) => rows.reduce((acc, r) => acc + r.qty, 0);
   const sumRevenue = (rows: { revenueRub: number }[]) => rows.reduce((acc, r) => acc + r.revenueRub, 0);
 
@@ -230,12 +216,12 @@ export async function syncYandexMonthlyFunnel(month: number, year: number) {
  * fetchYandexGoodsRealizationBothCampaigns) — на Vercel Hobby (лимит 300с на
  * функцию) вызывать с monthsBack=1 за раз, повторяя кнопку для след. месяца.
  */
-export async function syncYandexFunnelBackfill(monthsBack: number) {
+export async function syncYandexFunnelBackfill(marketplace: Marketplace, monthsBack: number) {
   const now = new Date();
   let monthsSynced = 0;
   for (let i = 1; i <= monthsBack; i++) {
     const target = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-    await syncYandexMonthlyFunnel(target.getUTCMonth() + 1, target.getUTCFullYear());
+    await syncYandexMonthlyFunnel(marketplace, target.getUTCMonth() + 1, target.getUTCFullYear());
     monthsSynced++;
   }
   return { monthsSynced };

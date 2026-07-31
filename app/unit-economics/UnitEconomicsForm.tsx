@@ -4,11 +4,12 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 type Product = { id: string; sku: string; name: string };
+type MarketplaceOption = { id: string; code: string; name: string };
 
 type FormValues = {
   id?: string;
   productId: string;
-  marketplace: string;
+  marketplaceId: string;
   periodMonth: string;
   cogsRub: string;
   inboundLogisticsRub: string;
@@ -23,7 +24,7 @@ type FormValues = {
 
 const emptyValues: FormValues = {
   productId: "",
-  marketplace: "",
+  marketplaceId: "",
   periodMonth: new Date().toISOString().slice(0, 7),
   cogsRub: "",
   inboundLogisticsRub: "",
@@ -34,13 +35,6 @@ const emptyValues: FormValues = {
   taxRub: "",
   laborAllocRub: "0",
   sellPriceRub: "",
-};
-
-const marketplaceLabels: Record<string, string> = {
-  "": "Все площадки / не указано",
-  WB: "Wildberries",
-  OZON: "Ozon",
-  YANDEX_MARKET: "Яндекс.Маркет",
 };
 
 const fifoSourceLabels: Record<string, string> = {
@@ -62,9 +56,11 @@ function n(v: string) {
 
 export default function UnitEconomicsForm({
   products,
+  marketplaces,
   initial,
 }: {
   products: Product[];
+  marketplaces: MarketplaceOption[];
   initial?: Partial<FormValues>;
 }) {
   const router = useRouter();
@@ -97,7 +93,11 @@ export default function UnitEconomicsForm({
       productId: values.productId,
       periodMonth: values.periodMonth,
     });
-    if (values.marketplace) qs.set("marketplace", values.marketplace);
+    const selectedMarketplace = marketplaces.find((m) => m.id === values.marketplaceId);
+    if (selectedMarketplace) {
+      qs.set("marketplace", selectedMarketplace.code);
+      qs.set("marketplaceId", selectedMarketplace.id);
+    }
 
     const res = await fetch(`/api/unit-economics/suggest?${qs.toString()}`);
     const body = await res.json();
@@ -134,7 +134,7 @@ export default function UnitEconomicsForm({
       notes.push(
         `комиссия/логистика МП/хранение/цена — из листинга ${body.listing.mpSku}`
       );
-    } else if (values.marketplace) {
+    } else if (values.marketplaceId) {
       notes.push("листинг товара на этой площадке не найден — заполните вручную");
     }
 
@@ -159,9 +159,11 @@ export default function UnitEconomicsForm({
     setSaving(true);
     setError(null);
 
+    const selectedMarketplace = marketplaces.find((m) => m.id === values.marketplaceId);
     const payload = {
       productId: values.productId,
-      marketplace: values.marketplace || null,
+      marketplaceId: values.marketplaceId || null,
+      marketplace: selectedMarketplace?.code ?? null,
       periodMonth: values.periodMonth,
       cogsRub: values.cogsRub,
       inboundLogisticsRub: values.inboundLogisticsRub,
@@ -220,12 +222,13 @@ export default function UnitEconomicsForm({
         <label>
           Площадка
           <select
-            value={values.marketplace}
-            onChange={(e) => set("marketplace", e.target.value)}
+            value={values.marketplaceId}
+            onChange={(e) => set("marketplaceId", e.target.value)}
           >
-            {Object.entries(marketplaceLabels).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
+            <option value="">Все площадки / не указано</option>
+            {marketplaces.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
               </option>
             ))}
           </select>

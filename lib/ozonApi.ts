@@ -6,17 +6,17 @@ export type OzonCredentials = { clientId: string; apiKey: string };
 
 // Свои clientId/apiKey у каждой компании (см. app/settings/integrations) —
 // из Marketplace.credentials текущей компании, а не общий process.env.
-async function getCredentials(): Promise<OzonCredentials> {
-  const marketplace = await prisma.marketplace.findFirst({ where: { code: "OZON" } });
-  const credentials = marketplace?.credentials as OzonCredentials | null | undefined;
+async function getCredentials(marketplaceId: string): Promise<OzonCredentials> {
+  const marketplace = await prisma.marketplace.findUniqueOrThrow({ where: { id: marketplaceId } });
+  const credentials = marketplace.credentials as OzonCredentials | null | undefined;
   if (!credentials?.clientId || !credentials?.apiKey) {
-    throw new Error("Client-Id / Api-Key Ozon не настроены — заполните их в «Настройки → Интеграции»");
+    throw new Error(`Client-Id / Api-Key Ozon не настроены для «${marketplace.name}» — заполните их в «Настройки → Интеграции»`);
   }
   return credentials;
 }
 
-async function ozonHeaders() {
-  const { clientId, apiKey } = await getCredentials();
+async function ozonHeaders(marketplaceId: string) {
+  const { clientId, apiKey } = await getCredentials(marketplaceId);
   return {
     "Client-Id": clientId,
     "Api-Key": apiKey,
@@ -24,10 +24,10 @@ async function ozonHeaders() {
   };
 }
 
-async function ozonPost<T>(path: string, body: unknown): Promise<T> {
+async function ozonPost<T>(marketplaceId: string, path: string, body: unknown): Promise<T> {
   const res = await fetch(`${OZON_BASE_URL}${path}`, {
     method: "POST",
-    headers: await ozonHeaders(),
+    headers: await ozonHeaders(marketplaceId),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -59,12 +59,12 @@ type StocksResponse = {
  * по всем ним) — то же допущение, что и у ручного XLSX-импорта: FBS-остатки
  * Ozon не считаем.
  */
-export async function fetchOzonStocks(): Promise<OzonStockRow[]> {
+export async function fetchOzonStocks(marketplaceId: string): Promise<OzonStockRow[]> {
   const rows: OzonStockRow[] = [];
   let cursor = "";
 
   for (;;) {
-    const page = await ozonPost<StocksResponse>("/v4/product/info/stocks", {
+    const page = await ozonPost<StocksResponse>(marketplaceId, "/v4/product/info/stocks", {
       filter: {},
       limit: 1000,
       cursor,
@@ -107,13 +107,13 @@ type StockOnWarehousesResponse = {
  * ассортимент умещается в один запрос (612 строк при limit 1000), но
  * оставляем цикл на случай роста каталога.
  */
-export async function fetchOzonStockByWarehouse(): Promise<OzonWarehouseStockRow[]> {
+export async function fetchOzonStockByWarehouse(marketplaceId: string): Promise<OzonWarehouseStockRow[]> {
   const rows: OzonWarehouseStockRow[] = [];
   let offset = 0;
   const limit = 1000;
 
   for (;;) {
-    const page = await ozonPost<StockOnWarehousesResponse>("/v2/analytics/stock_on_warehouses", {
+    const page = await ozonPost<StockOnWarehousesResponse>(marketplaceId, "/v2/analytics/stock_on_warehouses", {
       limit,
       offset,
       warehouse_type: "ALL",
@@ -149,7 +149,7 @@ type AnalyticsResponse = {
  * один запрос — год данных (ограничение самого Ozon: "cannot get more than
  * one year"), пагинация на случай, если строк наберётся больше лимита.
  */
-export async function fetchOzonMonthlySales(): Promise<OzonMonthlySale[]> {
+export async function fetchOzonMonthlySales(marketplaceId: string): Promise<OzonMonthlySale[]> {
   const dateTo = new Date();
   dateTo.setDate(dateTo.getDate() - 1); // "date_to must not be greater than current date"
   const dateFrom = new Date(dateTo);
@@ -160,7 +160,7 @@ export async function fetchOzonMonthlySales(): Promise<OzonMonthlySale[]> {
   const limit = 1000;
 
   for (;;) {
-    const page = await ozonPost<AnalyticsResponse>("/v1/analytics/data", {
+    const page = await ozonPost<AnalyticsResponse>(marketplaceId, "/v1/analytics/data", {
       date_from: dateFrom.toISOString().slice(0, 10),
       date_to: dateTo.toISOString().slice(0, 10),
       metrics: ["ordered_units"],
@@ -226,6 +226,7 @@ type TransactionListResponse = {
  * поэтому окно чуть меньше календарного месяца, а не ровно 30 дней.
  */
 export async function fetchOzonFinanceTransactions(
+  marketplaceId: string,
   dateFrom: string,
   dateTo: string
 ): Promise<OzonTransactionRow[]> {
@@ -233,7 +234,7 @@ export async function fetchOzonFinanceTransactions(
   let page = 1;
 
   for (;;) {
-    const res = await ozonPost<TransactionListResponse>("/v3/finance/transaction/list", {
+    const res = await ozonPost<TransactionListResponse>(marketplaceId, "/v3/finance/transaction/list", {
       filter: { date: { from: dateFrom, to: dateTo }, transaction_type: "all" },
       page,
       page_size: 1000,
@@ -283,6 +284,7 @@ export type OzonPostingRow = {
  * результат, если нужны все продажи компании, а не одна схема доставки.
  */
 export async function fetchOzonPostings(
+  marketplaceId: string,
   dateFrom: string,
   dateTo: string,
   schema: "fbo" | "fbs"
@@ -296,7 +298,7 @@ export async function fetchOzonPostings(
     // ушла в NaN (products[].price внутри базового posting её не содержит,
     // судя по всему это gated именно за этим флагом). Ставим true — если
     // окажется, что цена лежит где-то ещё, поправить extraction ниже.
-    const raw = await ozonPost<any>(`/v3/posting/${schema}/list`, {
+    const raw = await ozonPost<any>(marketplaceId, `/v3/posting/${schema}/list`, {
       filter: { since: dateFrom, to: dateTo },
       cursor,
       limit,
@@ -367,8 +369,8 @@ type ClusterListResponse = {
  * 2) сопоставить posting.warehouse_id из финансовых транзакций с
  * кластером — так у Ozon появляются продажи по региону, а не только остаток.
  */
-export async function fetchOzonClusters(): Promise<OzonClusterWarehouse[]> {
-  const res = await ozonPost<ClusterListResponse>("/v1/cluster/list", {
+export async function fetchOzonClusters(marketplaceId: string): Promise<OzonClusterWarehouse[]> {
+  const res = await ozonPost<ClusterListResponse>(marketplaceId, "/v1/cluster/list", {
     cluster_type: "CLUSTER_TYPE_OZON",
   });
   const rows: OzonClusterWarehouse[] = [];

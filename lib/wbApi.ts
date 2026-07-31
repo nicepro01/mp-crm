@@ -6,17 +6,17 @@ export type WbCredentials = { token: string };
 // хранится в Marketplace.credentials текущей компании (companyId
 // подставляет автоматически расширенный Prisma-клиент, см. lib/prisma.ts),
 // а не в общем на все компании process.env.
-async function getCredentials(): Promise<WbCredentials> {
-  const marketplace = await prisma.marketplace.findFirst({ where: { code: "WB" } });
-  const credentials = marketplace?.credentials as WbCredentials | null | undefined;
+async function getCredentials(marketplaceId: string): Promise<WbCredentials> {
+  const marketplace = await prisma.marketplace.findUniqueOrThrow({ where: { id: marketplaceId } });
+  const credentials = marketplace.credentials as WbCredentials | null | undefined;
   if (!credentials?.token) {
-    throw new Error("Токен WB не настроен — заполните его в «Настройки → Интеграции»");
+    throw new Error(`Токен WB не настроен для «${marketplace.name}» — заполните его в «Настройки → Интеграции»`);
   }
   return credentials;
 }
 
-async function wbGet<T>(baseUrl: string, path: string, params: Record<string, string>): Promise<T> {
-  const { token } = await getCredentials();
+async function wbGet<T>(marketplaceId: string, baseUrl: string, path: string, params: Record<string, string>): Promise<T> {
+  const { token } = await getCredentials(marketplaceId);
   const url = new URL(path, baseUrl);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
 
@@ -28,8 +28,8 @@ async function wbGet<T>(baseUrl: string, path: string, params: Record<string, st
   return res.json();
 }
 
-async function wbPost<T>(baseUrl: string, path: string, body: unknown): Promise<T> {
-  const { token } = await getCredentials();
+async function wbPost<T>(marketplaceId: string, baseUrl: string, path: string, body: unknown): Promise<T> {
+  const { token } = await getCredentials(marketplaceId);
   const res = await fetch(new URL(path, baseUrl), {
     method: "POST",
     headers: { Authorization: token, "Content-Type": "application/json" },
@@ -60,7 +60,7 @@ type WbCardsListResponse = {
 export type WbCardInfo = { vendorCode: string; name: string | null; photoUrl: string | null };
 
 /** Вся номенклатура продавца: nmId -> {артикул продавца, название, фото}. */
-export async function fetchWbNmIdToVendorCode(): Promise<Map<number, WbCardInfo>> {
+export async function fetchWbNmIdToVendorCode(marketplaceId: string): Promise<Map<number, WbCardInfo>> {
   const map = new Map<number, WbCardInfo>();
   let cursor: { updatedAt: string; nmID: number } | undefined;
 
@@ -68,7 +68,7 @@ export async function fetchWbNmIdToVendorCode(): Promise<Map<number, WbCardInfo>
     const settings: any = { cursor: { limit: 100 }, filter: { withPhoto: -1 } };
     if (cursor) settings.cursor = { ...settings.cursor, ...cursor };
 
-    const page = await wbPost<WbCardsListResponse>(CONTENT_URL, "/content/v2/get/cards/list", {
+    const page = await wbPost<WbCardsListResponse>(marketplaceId, CONTENT_URL, "/content/v2/get/cards/list", {
       settings,
     });
     for (const card of page.cards) {
@@ -103,13 +103,14 @@ type WbStocksReportResponse = {
 };
 
 /** Текущий остаток на складах WB (FBW), по всем складам и товарам сразу. */
-export async function fetchWbStocksByWarehouse(): Promise<WbWarehouseStockEntry[]> {
+export async function fetchWbStocksByWarehouse(marketplaceId: string): Promise<WbWarehouseStockEntry[]> {
   const all: WbWarehouseStockEntry[] = [];
   let offset = 0;
   const limit = 1000;
 
   for (;;) {
     const page = await wbPost<WbStocksReportResponse>(
+      marketplaceId,
       ANALYTICS_URL,
       "/api/analytics/v1/stocks-report/wb-warehouses",
       { limit, offset }
@@ -136,8 +137,8 @@ export type WbSaleEntry = {
 };
 
 /** Продажи и возвраты за период (используем для расчёта среднесуточных продаж). */
-export async function fetchWbSales(dateFrom: string): Promise<WbSaleEntry[]> {
-  return wbGet<WbSaleEntry[]>(STATISTICS_URL, "/api/v1/supplier/sales", { dateFrom });
+export async function fetchWbSales(marketplaceId: string, dateFrom: string): Promise<WbSaleEntry[]> {
+  return wbGet<WbSaleEntry[]>(marketplaceId, STATISTICS_URL, "/api/v1/supplier/sales", { dateFrom });
 }
 
 // --- Отчёт о реализации (детальный): реальные выплаты, комиссия, логистика,
@@ -174,13 +175,13 @@ export type WbFinanceRow = {
 };
 
 /** Детальный отчёт о реализации за период (может быть тяжёлым — недели по несколько МБ). */
-export async function fetchWbFinanceReport(dateFrom: string, dateTo: string): Promise<WbFinanceRow[]> {
+export async function fetchWbFinanceReport(marketplaceId: string, dateFrom: string, dateTo: string): Promise<WbFinanceRow[]> {
   const all: WbFinanceRow[] = [];
   let rrdid = 0;
   const limit = 5000;
 
   for (;;) {
-    const page = await wbGet<WbFinanceRow[]>(STATISTICS_URL, "/api/v5/supplier/reportDetailByPeriod", {
+    const page = await wbGet<WbFinanceRow[]>(marketplaceId, STATISTICS_URL, "/api/v5/supplier/reportDetailByPeriod", {
       dateFrom,
       dateTo,
       limit: String(limit),
@@ -219,8 +220,8 @@ export type WbOrderRow = {
  * 30 дней, битый для 45), поэтому окно ограничено константой в вызывающем
  * коде, а не пагинируется постранично (в отличие от reportDetailByPeriod).
  */
-export async function fetchWbOrders(dateFrom: string): Promise<WbOrderRow[]> {
-  return wbGet<WbOrderRow[]>(STATISTICS_URL, "/api/v1/supplier/orders", {
+export async function fetchWbOrders(marketplaceId: string, dateFrom: string): Promise<WbOrderRow[]> {
+  return wbGet<WbOrderRow[]>(marketplaceId, STATISTICS_URL, "/api/v1/supplier/orders", {
     dateFrom,
     flag: "0",
   });
@@ -242,8 +243,8 @@ type WbAdCampaignsCountResponse = {
 };
 
 /** ID кампаний в статусах "активна" (11) и "приостановлена" (9) — архивные (7) пропускаем. */
-async function fetchWbAdCampaignIds(): Promise<number[]> {
-  const res = await wbGet<WbAdCampaignsCountResponse>(ADVERT_URL, "/adv/v1/promotion/count", {});
+async function fetchWbAdCampaignIds(marketplaceId: string): Promise<number[]> {
+  const res = await wbGet<WbAdCampaignsCountResponse>(marketplaceId, ADVERT_URL, "/adv/v1/promotion/count", {});
   return res.adverts
     .filter((group) => group.status === 11 || group.status === 9)
     .flatMap((group) => group.advert_list.map((a) => a.advertId));
@@ -266,15 +267,15 @@ function sleep(ms: number) {
  * 60-90 секунд, поэтому пауза между батчами обязательна, иначе второй
  * батч почти гарантированно словит 429.
  */
-export async function fetchWbAdSpendByNmId(dateFrom: string, dateTo: string): Promise<Map<number, number>> {
-  const campaignIds = await fetchWbAdCampaignIds();
+export async function fetchWbAdSpendByNmId(marketplaceId: string, dateFrom: string, dateTo: string): Promise<Map<number, number>> {
+  const campaignIds = await fetchWbAdCampaignIds(marketplaceId);
   const spendByNmId = new Map<number, number>();
 
   for (let i = 0; i < campaignIds.length; i += AD_FULLSTATS_BATCH_SIZE) {
     const batch = campaignIds.slice(i, i + AD_FULLSTATS_BATCH_SIZE);
     if (i > 0) await sleep(75_000);
 
-    const entries = await wbGet<WbAdFullstatsEntry[]>(ADVERT_URL, "/adv/v3/fullstats", {
+    const entries = await wbGet<WbAdFullstatsEntry[]>(marketplaceId, ADVERT_URL, "/adv/v3/fullstats", {
       ids: batch.join(","),
       beginDate: dateFrom,
       endDate: dateTo,
@@ -313,8 +314,8 @@ export type WbClaim = {
 type WbClaimsResponse = { claims: WbClaim[]; total: number };
 
 /** Заявки на возврат — активные (ждут решения) или архивные (уже решённые). */
-export async function fetchWbClaims(isArchive: boolean): Promise<WbClaim[]> {
-  const res = await wbGet<WbClaimsResponse>(RETURNS_URL, "/api/v1/claims", {
+export async function fetchWbClaims(marketplaceId: string, isArchive: boolean): Promise<WbClaim[]> {
+  const res = await wbGet<WbClaimsResponse>(marketplaceId, RETURNS_URL, "/api/v1/claims", {
     is_archive: String(isArchive),
   });
   return res.claims;

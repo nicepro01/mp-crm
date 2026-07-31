@@ -16,12 +16,13 @@ export default async function EditUnitEconomicsPage({
 }
 
 async function EditUnitEconomicsPageContent(params: { id: string }) {
-  const [record, products] = await Promise.all([
+  const [record, products, marketplaces] = await Promise.all([
     prisma.unitEconomics.findUnique({ where: { id: params.id } }),
     prisma.product.findMany({
       orderBy: { name: "asc" },
       select: { id: true, sku: true, name: true },
     }),
+    prisma.marketplace.findMany({ orderBy: { name: "asc" }, select: { id: true, code: true, name: true } }),
   ]);
 
   if (!record) notFound();
@@ -31,10 +32,11 @@ async function EditUnitEconomicsPageContent(params: { id: string }) {
       <h1>Редактирование расчёта</h1>
       <UnitEconomicsForm
         products={products}
+        marketplaces={marketplaces}
         initial={{
           id: record.id,
           productId: record.productId,
-          marketplace: record.marketplace ?? "",
+          marketplaceId: record.marketplaceId ?? "",
           periodMonth: record.periodMonth.toISOString().slice(0, 7),
           cogsRub: record.cogsRub.toString(),
           inboundLogisticsRub: record.inboundLogisticsRub.toString(),

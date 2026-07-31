@@ -1,6 +1,6 @@
+import type { Marketplace } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getCurrentCompanyId } from "./tenantContext";
-import { MarketplaceNotConfiguredError } from "./syncErrors";
 import { fetchWbNmIdToVendorCode, fetchWbFinanceReport, fetchWbOrders, fetchWbAdSpendByNmId } from "./wbApi";
 import { fetchOzonStocks, fetchOzonFinanceTransactions } from "./ozonApi";
 import {
@@ -13,10 +13,10 @@ import {
 // Извлечено из app/api/unit-economics/sync-{wb,ozon,yandex}/route.ts без
 // изменений в самой логике — только так, чтобы lib/dailySync.ts могло
 // вызвать это напрямую (без лишнего HTTP-запроса самого на себя), см. план
-// "Единая кнопка «Обновить всё»". Ошибки конфигурации (площадка не
-// добавлена) теперь бросаются как MarketplaceNotConfiguredError, ошибки API
-// — как обычный Error; какой HTTP-статус им сопоставить, решает уже сам
-// route.ts (см. app/api/unit-economics/sync-*/route.ts).
+// "Единая кнопка «Обновить всё»". Площадку (конкретную строку Marketplace,
+// т.к. их может быть несколько одного кода — напр. два магазина Ozon)
+// резолвит вызывающий код и передаёт сюда готовой — см. lib/dailySync.ts
+// (MarketplaceNotConfiguredError бросается там же, до вызова).
 
 // Отчёт о реализации — тяжёлый (несколько МБ за неделю), берём последние
 // 30 дней как представительный период для реальной юнит-экономики.
@@ -35,12 +35,7 @@ const WB_ADS_WINDOW_DAYS = 30;
 const WB_ORDERS_WINDOW_DAYS = 30;
 const WB_BUYOUT_LAG_DAYS = 10;
 
-export async function syncWbUnitEconomics() {
-  const marketplace = await prisma.marketplace.findFirst({ where: { code: "WB" } });
-  if (!marketplace) {
-    throw new MarketplaceNotConfiguredError("Площадка WB не найдена — сначала добавьте её на странице «Площадки»");
-  }
-
+export async function syncWbUnitEconomics(marketplace: Marketplace) {
   const dateTo = new Date();
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - WB_REPORT_WINDOW_DAYS);
@@ -53,10 +48,10 @@ export async function syncWbUnitEconomics() {
   // к обрыву соединения ("fetch failed"), проверено эмпирически. Реклама
   // (fetchWbAdSpendByNmId) сама по себе может занять 1-2 минуты — батчами
   // по 50 кампаний с паузой между батчами из-за строгого рейт-лимита WB.
-  const nmIdMap = await fetchWbNmIdToVendorCode();
-  const report = await fetchWbFinanceReport(dateFrom.toISOString().slice(0, 10), dateTo.toISOString().slice(0, 10));
-  const orders = await fetchWbOrders(ordersDateFrom.toISOString().slice(0, 10));
-  const adSpendByNmId = await fetchWbAdSpendByNmId(adsDateFrom.toISOString().slice(0, 10), dateTo.toISOString().slice(0, 10));
+  const nmIdMap = await fetchWbNmIdToVendorCode(marketplace.id);
+  const report = await fetchWbFinanceReport(marketplace.id, dateFrom.toISOString().slice(0, 10), dateTo.toISOString().slice(0, 10));
+  const orders = await fetchWbOrders(marketplace.id, ordersDateFrom.toISOString().slice(0, 10));
+  const adSpendByNmId = await fetchWbAdSpendByNmId(marketplace.id, adsDateFrom.toISOString().slice(0, 10), dateTo.toISOString().slice(0, 10));
 
   // % выкупа по nm_id: заказы старше лага (уже успели решиться) минус
   // отменённые/невыкупленные, делённое на все такие заказы.
@@ -178,11 +173,12 @@ export async function syncWbUnitEconomics() {
       buyoutStat && buyoutStat.total > 0 ? ((buyoutStat.total - buyoutStat.cancelled) / buyoutStat.total) * 100 : null;
 
     await prisma.unitEconomics.upsert({
-      where: { productId_marketplace_periodMonth: { productId: product.id, marketplace: "WB", periodMonth } },
+      where: { productId_marketplaceId_periodMonth: { productId: product.id, marketplaceId: marketplace.id, periodMonth } },
       create: {
         companyId: getCurrentCompanyId(),
         productId: product.id,
         marketplace: "WB",
+        marketplaceId: marketplace.id,
         periodMonth,
         cogsRub,
         inboundLogisticsRub: 0,
@@ -254,20 +250,15 @@ const OZON_AD_OPERATION_NAMES = new Set(["Оплата за клик", "Прод
 const OZON_STORAGE_OPERATION_NAME = "Услуга размещения товаров на складе";
 const OZON_ACQUIRING_OPERATION_NAME = "Оплата эквайринга";
 
-export async function syncOzonUnitEconomics() {
-  const marketplace = await prisma.marketplace.findFirst({ where: { code: "OZON" } });
-  if (!marketplace) {
-    throw new MarketplaceNotConfiguredError("Площадка Ozon не найдена — сначала добавьте её на странице «Площадки»");
-  }
-
+export async function syncOzonUnitEconomics(marketplace: Marketplace) {
   const dateTo = new Date();
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - OZON_REPORT_WINDOW_DAYS);
 
   // Остатки тут нужны только ради sku -> артикул продавца (offer_id) —
   // в самих транзакциях artikula нет, только числовой sku Ozon.
-  const stocks = await fetchOzonStocks();
-  const transactions = await fetchOzonFinanceTransactions(dateFrom.toISOString(), dateTo.toISOString());
+  const stocks = await fetchOzonStocks(marketplace.id);
+  const transactions = await fetchOzonFinanceTransactions(marketplace.id, dateFrom.toISOString(), dateTo.toISOString());
 
   const vendorCodeBySku = new Map<number, string>();
   for (const s of stocks) {
@@ -397,11 +388,12 @@ export async function syncOzonUnitEconomics() {
     const mpCommissionPct = agg.revenueRub > 0 ? (agg.commissionRub / agg.revenueRub) * 100 : null;
 
     await prisma.unitEconomics.upsert({
-      where: { productId_marketplace_periodMonth: { productId: product.id, marketplace: "OZON", periodMonth } },
+      where: { productId_marketplaceId_periodMonth: { productId: product.id, marketplaceId: marketplace.id, periodMonth } },
       create: {
         companyId: getCurrentCompanyId(),
         productId: product.id,
         marketplace: "OZON",
+        marketplaceId: marketplace.id,
         periodMonth,
         cogsRub,
         inboundLogisticsRub: 0,
@@ -514,22 +506,17 @@ const YANDEX_SHEET_CATEGORY: Record<
   "Хранение невыкупов и возвратов": "reverseLogistics",
 };
 
-export async function syncYandexUnitEconomics() {
-  const marketplace = await prisma.marketplace.findFirst({ where: { code: "YANDEX_MARKET" } });
-  if (!marketplace) {
-    throw new MarketplaceNotConfiguredError("Площадка Яндекс.Маркет не найдена — сначала добавьте её на странице «Площадки»");
-  }
-
+export async function syncYandexUnitEconomics(marketplace: Marketplace) {
   const { year, month, dateFrom, dateTo, periodMonth } = previousMonth();
 
   // Независимые рейт-лимиты у Яндекса на каждый вид отчёта — можно
   // параллельно, но goods-realization сам по себе уже держит паузу ~130с
   // между FBY и FBS (см. fetchYandexGoodsRealizationBothCampaigns), так
   // что параллельный united-marketplace-services почти не удлиняет синк.
-  const { businessId } = await getYandexCredentials();
+  const { businessId } = await getYandexCredentials(marketplace.id);
   const [realization, services] = await Promise.all([
-    fetchYandexGoodsRealizationBothCampaigns(month, year),
-    fetchYandexServicesReport(businessId, dateFrom, dateTo),
+    fetchYandexGoodsRealizationBothCampaigns(marketplace.id, month, year),
+    fetchYandexServicesReport(marketplace.id, businessId, dateFrom, dateTo),
   ]);
 
   // Заказ -> набор SKU в нём (по всем трём срезам реализации сразу) — чтобы
@@ -699,11 +686,12 @@ export async function syncYandexUnitEconomics() {
     const buybackPct = buyoutDenominator > 0 ? (agg.quantitySold / buyoutDenominator) * 100 : null;
 
     await prisma.unitEconomics.upsert({
-      where: { productId_marketplace_periodMonth: { productId: product.id, marketplace: "YANDEX_MARKET", periodMonth } },
+      where: { productId_marketplaceId_periodMonth: { productId: product.id, marketplaceId: marketplace.id, periodMonth } },
       create: {
         companyId: getCurrentCompanyId(),
         productId: product.id,
         marketplace: "YANDEX_MARKET",
+        marketplaceId: marketplace.id,
         periodMonth,
         cogsRub,
         inboundLogisticsRub: 0,

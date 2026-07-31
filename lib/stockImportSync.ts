@@ -1,3 +1,4 @@
+import type { Marketplace } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getCurrentCompanyId } from "./tenantContext";
 import { MarketplaceNotConfiguredError } from "./syncErrors";
@@ -17,20 +18,15 @@ import { upsertImportItem } from "./matching";
 // остатков.
 const SALES_WINDOW_DAYS = 28;
 
-export async function syncWbStockImport() {
-  const marketplace = await prisma.marketplace.findFirst({ where: { code: "WB" } });
-  if (!marketplace) {
-    throw new MarketplaceNotConfiguredError("Площадка WB не найдена — сначала добавьте её на странице «Площадки»");
-  }
-
+export async function syncWbStockImport(marketplace: Marketplace) {
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - SALES_WINDOW_DAYS);
   // Последовательно, не Promise.all — параллельные тяжёлые запросы к WB
   // (несколько категорий сразу) уже приводили к 429/обрыву соединения.
-  const nmIdMap = await fetchWbNmIdToVendorCode();
-  const stocks = await fetchWbStocksByWarehouse();
-  const sales = await fetchWbSales(dateFrom.toISOString().slice(0, 10));
-  const orders = await fetchWbOrders(dateFrom.toISOString().slice(0, 10));
+  const nmIdMap = await fetchWbNmIdToVendorCode(marketplace.id);
+  const stocks = await fetchWbStocksByWarehouse(marketplace.id);
+  const sales = await fetchWbSales(marketplace.id, dateFrom.toISOString().slice(0, 10));
+  const orders = await fetchWbOrders(marketplace.id, dateFrom.toISOString().slice(0, 10));
 
   type Agg = {
     qtyAvailable: number;
@@ -221,25 +217,20 @@ export async function syncWbStockImport() {
   return { ...summary, pendingCodes };
 }
 
-export async function syncOzonStockImport() {
-  const marketplace = await prisma.marketplace.findFirst({ where: { code: "OZON" } });
-  if (!marketplace) {
-    throw new MarketplaceNotConfiguredError("Площадка Ozon не найдена — сначала добавьте её на странице «Площадки»");
-  }
-
+export async function syncOzonStockImport(marketplace: Marketplace) {
   const warehouse = await prisma.warehouse.findFirst({ where: { marketplaceId: marketplace.id, type: "MARKETPLACE_FBO" } });
   if (!warehouse) {
-    throw new MarketplaceNotConfiguredError("Склад Ozon FBO не найден — откройте страницу «Склады», он создастся автоматически");
+    throw new MarketplaceNotConfiguredError(`Склад «${marketplace.name}» FBO не найден — откройте страницу «Склады», он создастся автоматически`);
   }
 
   const dateTo = new Date();
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - SALES_WINDOW_DAYS);
   const [rows, warehouseRows, clusters, transactions] = await Promise.all([
-    fetchOzonStocks(),
-    fetchOzonStockByWarehouse(),
-    fetchOzonClusters(),
-    fetchOzonFinanceTransactions(dateFrom.toISOString(), dateTo.toISOString()),
+    fetchOzonStocks(marketplace.id),
+    fetchOzonStockByWarehouse(marketplace.id),
+    fetchOzonClusters(marketplace.id),
+    fetchOzonFinanceTransactions(marketplace.id, dateFrom.toISOString(), dateTo.toISOString()),
   ]);
 
   const vendorCodeBySku = new Map(rows.map((r) => [r.ozonSku, r.vendorCode]));
@@ -415,26 +406,21 @@ export async function syncOzonStockImport() {
   return { ...summary, pendingCodes };
 }
 
-export async function syncYandexStockImport() {
-  const marketplace = await prisma.marketplace.findFirst({ where: { code: "YANDEX_MARKET" } });
-  if (!marketplace) {
-    throw new MarketplaceNotConfiguredError("Площадка Яндекс.Маркет не найдена — сначала добавьте её на странице «Площадки»");
-  }
-
+export async function syncYandexStockImport(marketplace: Marketplace) {
   const [fboWarehouse, fbsWarehouse] = await Promise.all([
     prisma.warehouse.findFirst({ where: { marketplaceId: marketplace.id, type: "MARKETPLACE_FBO" } }),
     prisma.warehouse.findFirst({ where: { marketplaceId: marketplace.id, type: "MARKETPLACE_FBS" } }),
   ]);
   if (!fboWarehouse || !fbsWarehouse) {
     throw new MarketplaceNotConfiguredError(
-      "Склады Яндекс.Маркет FBO/FBS не найдены — откройте страницу «Склады», они создадутся автоматически"
+      `Склады «${marketplace.name}» FBO/FBS не найдены — откройте страницу «Склады», они создадутся автоматически`
     );
   }
 
   const [rows, warehouseRows, salesRows] = await Promise.all([
-    fetchYandexMarketStocks(),
-    fetchYandexMarketStockByWarehouse(),
-    fetchYandexMarketSalesByWarehouse(SALES_WINDOW_DAYS),
+    fetchYandexMarketStocks(marketplace.id),
+    fetchYandexMarketStockByWarehouse(marketplace.id),
+    fetchYandexMarketSalesByWarehouse(marketplace.id, SALES_WINDOW_DAYS),
   ]);
 
   const summary = { total: rows.length, updated: 0, pending: 0, skipped: 0 };

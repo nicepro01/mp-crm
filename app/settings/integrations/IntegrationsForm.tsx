@@ -65,7 +65,12 @@ function IntegrationCard({ row }: { row: MarketplaceRow }) {
 
   return (
     <form onSubmit={handleSubmit} style={{ marginBottom: 20 }}>
-      <h3 style={{ fontSize: 16, marginBottom: 4 }}>{CODE_LABELS[row.code] ?? row.name}</h3>
+      {/* Название магазина в приоритете — два магазина одной площадки (напр.
+          два Ozon) иначе показывали бы два одинаковых заголовка "Ozon". */}
+      <h3 style={{ fontSize: 16, marginBottom: 4 }}>
+        {row.name}
+        {CODE_LABELS[row.code] && row.name !== CODE_LABELS[row.code] ? ` (${CODE_LABELS[row.code]})` : ""}
+      </h3>
       {fields.map((f) => (
         <label key={f.key}>
           {f.label}

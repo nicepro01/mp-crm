@@ -61,8 +61,8 @@ model Company {
 // Один email — один аккаунт на всю систему (не на компанию), стандартная
 // практика для SaaS с регистрацией через /signup.
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
+  id           String  @id @default(uuid())
+  email        String  @unique
   passwordHash String
   name         String?
   position     String? // Должность — просто подпись для админки, на доступ не влияет.
@@ -106,7 +106,7 @@ model PasswordResetToken {
 // 1. ТОВАРЫ
 // ---------------------------------------------------------------------
 model Product {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -161,14 +161,14 @@ model Product {
   // остатка считаются по фактическому текущему темпу продаж).
   seasonalDemandMultiplier Decimal @default(1) @db.Decimal(4, 2)
 
-  supplierPrices   SupplierPrice[]
-  batchItems       BatchItem[]
-  mpListings       MpListing[]
-  stock            Stock[]
-  orderItems       OrderItem[]
-  unitEconomics    UnitEconomics[]
-  mpImportMatches  MpImportItem[]
-  costHistory      ProductCostHistory[]
+  supplierPrices     SupplierPrice[]
+  batchItems         BatchItem[]
+  mpListings         MpListing[]
+  stock              Stock[]
+  orderItems         OrderItem[]
+  unitEconomics      UnitEconomics[]
+  mpImportMatches    MpImportItem[]
+  costHistory        ProductCostHistory[]
   stockAnalytics     ProductStockAnalytics[]
   clusterAnalytics   ProductClusterAnalytics[]
   warehouseAnalytics ProductWarehouseAnalytics[]
@@ -213,7 +213,7 @@ model ProductCostHistory {
 // 2. ПОСТАВЩИКИ + СРАВНЕНИЕ ЦЕН
 // ---------------------------------------------------------------------
 model Supplier {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -236,7 +236,7 @@ model Supplier {
 
 // История цен от поставщика по товару — для сравнения динамики
 model SupplierPrice {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -274,7 +274,7 @@ enum LogisticsStatus {
 // Никакой курсовой/логистической математики на уровне поставки больше нет —
 // закупочная цена за штуку в позиции уже готовое число в рублях.
 model Batch {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -300,7 +300,7 @@ model Batch {
 
 // Позиции внутри поставки — что едет, сколько, по какой цене за штуку
 model BatchItem {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -334,7 +334,7 @@ model BatchItem {
 // purchasePriceRub (логистика на уровне поставки больше не считается),
 // но структура сохранена, чтобы FIFO/CogsAllocation не менялись.
 model UnitCost {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -356,7 +356,7 @@ model UnitCost {
 // на МОМЕНТ списания (снимок landedCostRub — история не меняется задним числом,
 // даже если курс/логистика партии позже будут отредактированы).
 model CogsAllocation {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -386,12 +386,14 @@ enum MarketplaceCode {
 }
 
 model Marketplace {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  code MarketplaceCode // уникален в пределах компании — у каждой своя строка на площадку
-  name String
+  // НЕ уникален сам по себе — у компании может быть несколько магазинов
+  // одной площадки (напр. два разных кабинета Ozon), различаются по name.
+  code MarketplaceCode
+  name String // уникально в пределах компании — этим полем отличаем "Ozon" от "Ozon 2"
 
   // Учётные данные API этой площадки, СВОИ у каждой компании (токен WB,
   // clientId+apiKey Ozon, токен Яндекса) — раньше читались из глобальных
@@ -412,22 +414,24 @@ model Marketplace {
   // "Кросс-докинг") — { [operationTypeName]: { amount, count } }.
   unattributedBreakdown  Json?
 
-  listings         MpListing[]
-  warehouses       Warehouse[]
-  importItems      MpImportItem[]
+  listings           MpListing[]
+  warehouses         Warehouse[]
+  importItems        MpImportItem[]
   stockAnalytics     ProductStockAnalytics[]
   clusterAnalytics   ProductClusterAnalytics[]
   warehouseAnalytics ProductWarehouseAnalytics[]
   returnClaims       ReturnClaim[]
   monthlySales       ProductMonthlySales[]
   dailyFunnel        MarketplaceDailyFunnel[]
+  unitEconomics      UnitEconomics[]
 
-  @@unique([companyId, code])
+  @@unique([companyId, name])
+  @@index([companyId, code])
   @@map("marketplaces")
 }
 
 model MpListing {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -465,7 +469,7 @@ enum MatchStatus {
 // 3) остаётся PENDING — ждёт ручного выбора. Product без подтверждения
 // никогда не создаётся автоматически.
 model MpImportItem {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -500,7 +504,7 @@ enum WarehouseType {
 }
 
 model Warehouse {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -516,7 +520,7 @@ model Warehouse {
 }
 
 model Stock {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -557,7 +561,7 @@ enum OrderStatus {
 }
 
 model Order {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -576,7 +580,7 @@ model Order {
 }
 
 model OrderItem {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -598,14 +602,19 @@ model OrderItem {
 // 7. ЮНИТ-ЭКОНОМИКА
 // ---------------------------------------------------------------------
 model UnitEconomics {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  productId   String
-  product     Product          @relation(fields: [productId], references: [id])
-  marketplace MarketplaceCode?
-  periodMonth DateTime // на какой месяц рассчитано (расходы могут меняться)
+  productId      String
+  product        Product          @relation(fields: [productId], references: [id])
+  // Код оставлен для быстрых фильтров/лейблов, но НЕ является ключом
+  // идентичности площадки — при нескольких магазинах одного кода (напр. два
+  // Ozon) сама привязка идёт через marketplaceId.
+  marketplace    MarketplaceCode?
+  marketplaceId  String?
+  marketplaceRef Marketplace?     @relation(fields: [marketplaceId], references: [id])
+  periodMonth    DateTime // на какой месяц рассчитано (расходы могут меняться)
 
   cogsRub             Decimal  @db.Decimal(10, 2) // себестоимость (из UnitCost, FIFO)
   inboundLogisticsRub Decimal  @db.Decimal(10, 2) // логистика до склада МП/своего склада
@@ -623,8 +632,8 @@ model UnitEconomics {
   payoutRub  Decimal? @db.Decimal(10, 2) // итого к оплате поставщику после всех удержаний
   schemeType String? // FBO / FBS
 
-  returnsQty          Int      @default(0) // возвращено за период, шт
-  reverseLogisticsRub Decimal? @db.Decimal(10, 2) // обратная логистика (возврат/пересортировка склада) на ед. товара — уже вычтена из netMarginRub, не складывать повторно с mpLogisticsRub
+  returnsQty           Int      @default(0) // возвращено за период, шт
+  reverseLogisticsRub  Decimal? @db.Decimal(10, 2) // обратная логистика (возврат/пересортировка склада) на ед. товара — уже вычтена из netMarginRub, не складывать повторно с mpLogisticsRub
   // ОЦЕНКА, не факт: доля расходов площадки, которые она сама не привязала
   // ни к одному товару (у Ozon — гл. образом реклама без sku), разнесённая
   // пропорционально выручке этого товара за тот же период. Уже вычтена из
@@ -642,7 +651,7 @@ model UnitEconomics {
 
   calculatedAt DateTime @default(now())
 
-  @@unique([productId, marketplace, periodMonth])
+  @@unique([productId, marketplaceId, periodMonth])
   @@index([productId, periodMonth])
   @@index([companyId])
   @@map("unit_economics")
@@ -657,7 +666,7 @@ model UnitEconomics {
 // (marketplaceId, mpSku) — как и Stock, это не история, а актуальное
 // состояние на момент последней загрузки отчёта.
 model ProductStockAnalytics {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -690,7 +699,7 @@ model ProductStockAnalytics {
 // чтобы находить перекос остатков между складами Ozon и предлагать
 // внутреннее перемещение вместо новой поставки из Китая.
 model ProductClusterAnalytics {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -723,7 +732,7 @@ model ProductClusterAnalytics {
 // склада WB/Ozon как отдаёт сама площадка ("Коледино", "ХАБАРОВСК_2_РФЦ");
 // у Яндекса пока нет читаемого имени склада — используется "Склад #<id>".
 model ProductWarehouseAnalytics {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -756,7 +765,7 @@ model ProductWarehouseAnalytics {
 // marketplaceId), отдельного денормализованного поля с готовым
 // коэффициентом нет — иначе он мог бы разойтись с исходными данными.
 model ProductMonthlySales {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -769,7 +778,7 @@ model ProductMonthlySales {
   year  Int
   month Int // 1-12
 
-  qtySold Int // штук продано за этот календарный месяц на этой площадке
+  qtySold      Int // штук продано за этот календарный месяц на этой площадке
   // Сколько дней этого месяца реально попало в выгруженное окно (для
   // первого/последнего месяца окна — может быть меньше полного месяца).
   daysInPeriod Int
@@ -833,7 +842,7 @@ model MarketplaceDailyFunnel {
 // пока товар не сматчен по nmId — то же самое допущение, что и у остальных
 // синков площадок (см. lib/matching.ts), Product не создаётся автоматически.
 model ReturnClaim {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -872,7 +881,7 @@ model ReturnClaim {
 // колонки между двумя соседними достаточно взять среднее их order,
 // не трогая order всех остальных строк.
 model TaskColumn {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -887,7 +896,7 @@ model TaskColumn {
 }
 
 model Task {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -921,7 +930,7 @@ model Task {
 // публичного url, чтобы при удалении вложения можно было удалить сам файл
 // из Storage напрямую по пути, не разбирая URL.
 model TaskAttachment {
-  id      String @id @default(uuid())
+  id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 

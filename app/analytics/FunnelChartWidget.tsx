@@ -65,7 +65,15 @@ function formatPct(part: number, total: number): string {
   return `${Math.round((part / total) * 100)}%`;
 }
 
-export default function FunnelChartWidget({ code, marketplaceName }: { code: string; marketplaceName: string }) {
+export default function FunnelChartWidget({
+  marketplaceId,
+  code,
+  marketplaceName,
+}: {
+  marketplaceId: string;
+  code: string;
+  marketplaceName: string;
+}) {
   const [range, setRange] = useState("30");
   const [data, setData] = useState<SeriesResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -75,7 +83,7 @@ export default function FunnelChartWidget({ code, marketplaceName }: { code: str
   async function loadSeries(r: string) {
     setLoading(true);
     try {
-      const res = await fetch(`/api/marketplace-funnel/series?code=${code}&range=${r}`);
+      const res = await fetch(`/api/marketplace-funnel/series?marketplaceId=${marketplaceId}&range=${r}`);
       const body = await res.json();
       setData(body);
     } finally {
@@ -86,18 +94,18 @@ export default function FunnelChartWidget({ code, marketplaceName }: { code: str
   useEffect(() => {
     loadSeries(range);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range]);
+  }, [range, marketplaceId]);
 
   async function handleSync(bodyOverride?: Record<string, unknown>) {
     setSyncing(true);
     setSyncError(null);
     const cfg = SYNC_CONFIG[code];
-    const requestBody = bodyOverride ?? cfg.body;
+    const requestBody = { marketplaceId, ...(bodyOverride ?? cfg.body) };
     try {
       const res = await fetch(cfg.path, {
         method: "POST",
-        headers: requestBody ? { "Content-Type": "application/json" } : undefined,
-        body: requestBody ? JSON.stringify(requestBody) : undefined,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {

@@ -15,15 +15,12 @@ export type MpListingSuggestion = {
  */
 export async function suggestMpListingCosts(
   productId: string,
-  marketplaceCode: string | null
+  marketplaceId: string | null
 ): Promise<MpListingSuggestion> {
-  if (!marketplaceCode) return null;
+  if (!marketplaceId) return null;
 
   const listing = await prisma.mpListing.findFirst({
-    where: {
-      productId,
-      marketplace: { code: marketplaceCode as any },
-    },
+    where: { productId, marketplaceId },
     orderBy: { isActive: "desc" },
   });
 

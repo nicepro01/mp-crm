@@ -1,3 +1,4 @@
+import type { Marketplace } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentCompanyId } from "@/lib/tenantContext";
 import { fetchWbSales } from "@/lib/wbApi";
@@ -138,8 +139,7 @@ async function upsertMonthlySalesFromMonthlyTotals(
 const WB_REQUESTED_HISTORY_DAYS = 400;
 
 /** Тянет историю продаж WB и копит помесячную статистику по товару (см. lib/seasonality.ts). */
-export async function syncSeasonalityFromWb(): Promise<SeasonalitySyncSummary> {
-  const marketplace = await prisma.marketplace.findFirstOrThrow({ where: { code: "WB" } });
+export async function syncSeasonalityFromWb(marketplace: Marketplace): Promise<SeasonalitySyncSummary> {
   const products = await prisma.product.findMany({
     where: { vendorCode: { not: null } },
     select: { id: true, vendorCode: true },
@@ -148,7 +148,7 @@ export async function syncSeasonalityFromWb(): Promise<SeasonalitySyncSummary> {
 
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - WB_REQUESTED_HISTORY_DAYS);
-  const sales = await fetchWbSales(dateFrom.toISOString().slice(0, 10));
+  const sales = await fetchWbSales(marketplace.id, dateFrom.toISOString().slice(0, 10));
 
   // saleID начинается с "S" — реальная продажа, "R" — возврат; возвраты в
   // сезонность не считаем (тот же принцип, что и в импорте остатков).
@@ -173,14 +173,13 @@ export async function syncSeasonalityFromWb(): Promise<SeasonalitySyncSummary> {
 }
 
 /** Тянет годовую помесячную статистику заказов Ozon (analytics/data) и копит по товару. */
-export async function syncSeasonalityFromOzon(): Promise<SeasonalitySyncSummary> {
-  const marketplace = await prisma.marketplace.findFirstOrThrow({ where: { code: "OZON" } });
+export async function syncSeasonalityFromOzon(marketplace: Marketplace): Promise<SeasonalitySyncSummary> {
   const products = await prisma.product.findMany({
     select: { id: true, sku: true },
   });
   const productIdBySku = new Map(products.map((p) => [p.sku.trim(), p.id]));
 
-  const monthlySales = await fetchOzonMonthlySales();
+  const monthlySales = await fetchOzonMonthlySales(marketplace.id);
 
   const rows: MonthlyQty[] = [];
   let matched = 0;
@@ -211,15 +210,14 @@ export async function syncSeasonalityFromOzon(): Promise<SeasonalitySyncSummary>
  * медленнее, за счёт повторных синков со временем. Метод жёстко ограничен
  * 1 запросом генерации в 10 минут — не дёргать чаще, чем раз в сутки.
  */
-export async function syncSeasonalityFromYandexMarket(): Promise<SeasonalitySyncSummary> {
-  const marketplace = await prisma.marketplace.findFirstOrThrow({ where: { code: "YANDEX_MARKET" } });
+export async function syncSeasonalityFromYandexMarket(marketplace: Marketplace): Promise<SeasonalitySyncSummary> {
   const products = await prisma.product.findMany({
     where: { vendorCode: { not: null } },
     select: { id: true, vendorCode: true },
   });
   const productIdByVendorCode = new Map(products.map((p) => [p.vendorCode!.trim(), p.id]));
 
-  const monthlySales = await fetchYandexMarketMonthlySales();
+  const monthlySales = await fetchYandexMarketMonthlySales(marketplace.id);
 
   const rows: MonthlyQty[] = [];
   let matched = 0;
@@ -259,7 +257,7 @@ async function syncYandexMonthFromRealization(
   month: number,
   year: number
 ): Promise<{ matched: number; unmatched: number; monthsUpserted: number }> {
-  const report = await fetchYandexGoodsRealizationBothCampaigns(month, year);
+  const report = await fetchYandexGoodsRealizationBothCampaigns(marketplaceId, month, year);
 
   const qtyBySku = new Map<string, number>();
   for (const row of report.delivered) {
@@ -302,8 +300,7 @@ async function syncYandexMonthFromRealization(
  * месяцев займут примерно monthsBack × ~4-4.5 мин. Вызывающий должен
  * запускать это в фоне, не блокируя обычный HTTP-запрос.
  */
-export async function syncSeasonalityFromYandexMarketBackfill(monthsBack: number): Promise<SeasonalitySyncSummary> {
-  const marketplace = await prisma.marketplace.findFirstOrThrow({ where: { code: "YANDEX_MARKET" } });
+export async function syncSeasonalityFromYandexMarketBackfill(marketplace: Marketplace, monthsBack: number): Promise<SeasonalitySyncSummary> {
   const products = await prisma.product.findMany({
     where: { vendorCode: { not: null } },
     select: { id: true, vendorCode: true },

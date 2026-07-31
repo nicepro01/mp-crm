@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getApiTenantSession, unauthorizedResponse } from "@/lib/session";
 import { runWithTenant } from "@/lib/tenantContext";
 import { syncSeasonalityFromYandexMarketBackfill } from "@/lib/seasonalitySync";
+import { resolveMarketplace } from "@/lib/resolveMarketplace";
 
 // Может идти десятки минут (рейт-лимит Яндекса — 1 запрос генерации отчёта
 // в 2 мин, общий на обе кампании) — изначально не рассчитан на serverless с
@@ -26,7 +27,8 @@ async function POSTContent(req: NextRequest) {
   const monthsBack = Math.min(Math.max(Number(body?.monthsBack) || 3, 1), 12);
 
   try {
-    const summary = await syncSeasonalityFromYandexMarketBackfill(monthsBack);
+    const marketplace = await resolveMarketplace("YANDEX_MARKET", body?.marketplaceId);
+    const summary = await syncSeasonalityFromYandexMarketBackfill(marketplace, monthsBack);
     return NextResponse.json(summary);
   } catch (err: any) {
     return NextResponse.json(

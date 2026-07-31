@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getApiTenantSession, unauthorizedResponse } from "@/lib/session";
 import { runWithTenant } from "@/lib/tenantContext";
 import { syncYandexFunnelBackfill } from "@/lib/marketplaceFunnelSync";
+import { resolveMarketplace } from "@/lib/resolveMarketplace";
 
 // Тот же лимит, что и у app/api/seasonality/sync-yandex-backfill/route.ts —
 // максимум, который Vercel Hobby разрешает для serverless-функции. Вызывать
@@ -19,7 +20,8 @@ async function POSTContent(req: NextRequest) {
   const monthsBack = Math.min(Math.max(Number(body?.monthsBack) || 1, 1), 12);
 
   try {
-    const summary = await syncYandexFunnelBackfill(monthsBack);
+    const marketplace = await resolveMarketplace("YANDEX_MARKET", body?.marketplaceId);
+    const summary = await syncYandexFunnelBackfill(marketplace, monthsBack);
     return NextResponse.json(summary);
   } catch (err: any) {
     return NextResponse.json(

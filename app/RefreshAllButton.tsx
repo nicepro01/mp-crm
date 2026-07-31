@@ -34,13 +34,18 @@ export default function RefreshAllButton() {
           if (!res.ok) {
             return { label, ok: false, detail: body.error ?? "Ошибка запроса" };
           }
-          const failed = Object.entries(body as Record<string, { ok: boolean; error?: string }>).filter(
-            ([, v]) => v && v.ok === false
+          // Тело — {[marketplaceId]: {name, results: {[subSync]: {ok, error?}}}}
+          // (несколько строк на код возможны — напр. два магазина Ozon).
+          const perMarketplace = body as Record<string, { name: string; results: Record<string, { ok: boolean; error?: string }> }>;
+          const failed = Object.values(perMarketplace).flatMap(({ name, results }) =>
+            Object.entries(results)
+              .filter(([, v]) => v && v.ok === false)
+              .map(([k, v]) => `${name}/${k}: ${v.error}`)
           );
           return {
             label,
             ok: failed.length === 0,
-            detail: failed.length === 0 ? "готово" : failed.map(([k, v]) => `${k}: ${v.error}`).join("; "),
+            detail: failed.length === 0 ? "готово" : failed.join("; "),
           };
         } catch (err: any) {
           return { label, ok: false, detail: err.message ?? "Не удалось выполнить запрос" };

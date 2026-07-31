@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getApiTenantSession, unauthorizedResponse } from "@/lib/session";
 import { runWithTenant } from "@/lib/tenantContext";
 import { syncOzonDailyFunnel } from "@/lib/marketplaceFunnelSync";
+import { resolveMarketplace } from "@/lib/resolveMarketplace";
 
 // В отличие от WB (жёсткий обрыв API на ~30 днях), у Ozon глубина окна —
 // наш собственный выбор, не ограничение площадки. Разово можно запросить
@@ -21,7 +22,8 @@ async function POSTContent(req: NextRequest) {
   const windowDays = Math.min(Math.max(Number(body?.windowDays) || 90, 1), 365);
 
   try {
-    const summary = await syncOzonDailyFunnel(windowDays);
+    const marketplace = await resolveMarketplace("OZON", body?.marketplaceId);
+    const summary = await syncOzonDailyFunnel(marketplace, windowDays);
     return NextResponse.json(summary);
   } catch (err: any) {
     return NextResponse.json(

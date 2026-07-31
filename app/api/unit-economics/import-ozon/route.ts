@@ -134,9 +134,9 @@ async function POSTContent(req: NextRequest) {
 
     await prisma.unitEconomics.upsert({
       where: {
-        productId_marketplace_periodMonth: {
+        productId_marketplaceId_periodMonth: {
           productId: product.id,
-          marketplace: "OZON",
+          marketplaceId: marketplace.id,
           periodMonth: PERIOD_MONTH,
         },
       },
@@ -144,6 +144,7 @@ async function POSTContent(req: NextRequest) {
         companyId: getCurrentCompanyId(),
         productId: product.id,
         marketplace: "OZON",
+        marketplaceId: marketplace.id,
         periodMonth: PERIOD_MONTH,
         cogsRub: row.cogsPerUnitRub ?? 0,
         inboundLogisticsRub: 0,
