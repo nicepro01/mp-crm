@@ -3,7 +3,13 @@ import { prisma } from "./prisma";
 import { getCurrentCompanyId } from "./tenantContext";
 import { MarketplaceNotConfiguredError } from "./syncErrors";
 import { fetchWbNmIdToVendorCode, fetchWbStocksByWarehouse, fetchWbSales, fetchWbOrders } from "./wbApi";
-import { fetchOzonStocks, fetchOzonStockByWarehouse, fetchOzonClusters, fetchOzonFinanceTransactions } from "./ozonApi";
+import {
+  fetchOzonStocks,
+  fetchOzonStockByWarehouse,
+  fetchOzonClusters,
+  fetchOzonFinanceTransactions,
+  fetchOzonProductAttributes,
+} from "./ozonApi";
 import {
   fetchYandexMarketStocks,
   fetchYandexMarketStockByWarehouse,
@@ -226,12 +232,28 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
   const dateTo = new Date();
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - SALES_WINDOW_DAYS);
-  const [rows, warehouseRows, clusters, transactions] = await Promise.all([
+  const [stockRows, warehouseRows, clusters, transactions, attributes] = await Promise.all([
     fetchOzonStocks(marketplace.id),
     fetchOzonStockByWarehouse(marketplace.id),
     fetchOzonClusters(marketplace.id),
     fetchOzonFinanceTransactions(marketplace.id, dateFrom.toISOString(), dateTo.toISOString()),
+    fetchOzonProductAttributes(marketplace.id),
   ]);
+
+  // fetchOzonStocks отдаёт только товары с остатком на FBO — часть каталога
+  // (FBS-only, или вообще без остатка сейчас) в него не попадает, хотя
+  // товар реально есть у продавца. fetchOzonProductAttributes — полный
+  // каталог без привязки к остатку, дополняем им (нулевым остатком) те
+  // offer_id, которых нет в стоках, чтобы карточки товаров и вес/габариты
+  // подтягивались даже для позиций без FBO-остатка сейчас.
+  const attrsByOfferId = new Map(attributes.map((a) => [a.offerId, a]));
+  const seenOzonSkus = new Set(stockRows.map((r) => r.ozonSku));
+  const rows = [...stockRows];
+  for (const attr of attributes) {
+    if (!attr.ozonSku || seenOzonSkus.has(attr.ozonSku)) continue;
+    seenOzonSkus.add(attr.ozonSku);
+    rows.push({ vendorCode: attr.offerId, ozonSku: attr.ozonSku, qtyAvailable: 0 });
+  }
 
   const vendorCodeBySku = new Map(rows.map((r) => [r.ozonSku, r.vendorCode]));
   const soldCountByVendorCode = new Map<string, number>();
@@ -284,6 +306,34 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
         },
         update: { qtyAvailable: row.qtyAvailable, syncSource: "ozon_api", syncedAt: new Date() },
       });
+
+      // Донасыщаем реальными вес/габаритами от площадки — только если у
+      // товара сейчас стоит явная заглушка (1×1×1, см. bulk-create-placeholders),
+      // чтобы не затирать то, что уже было осознанно введено вручную.
+      const attrs = attrsByOfferId.get(row.vendorCode);
+      if (attrs && (attrs.weightG || attrs.lengthMm || attrs.widthMm || attrs.heightMm)) {
+        const product = await prisma.product.findUnique({
+          where: { id: matchedProductId },
+          select: { itemWeightG: true, itemLengthMm: true, itemWidthMm: true, itemHeightMm: true },
+        });
+        const isPlaceholder =
+          product &&
+          Number(product.itemWeightG) === 1 &&
+          product.itemLengthMm === 1 &&
+          product.itemWidthMm === 1 &&
+          product.itemHeightMm === 1;
+        if (isPlaceholder) {
+          await prisma.product.update({
+            where: { id: matchedProductId },
+            data: {
+              itemWeightG: attrs.weightG ?? 1,
+              itemLengthMm: attrs.lengthMm ?? 1,
+              itemWidthMm: attrs.widthMm ?? 1,
+              itemHeightMm: attrs.heightMm ?? 1,
+            },
+          });
+        }
+      }
 
       const agg = stockAggByProduct.get(matchedProductId) ?? { qtyAvailable: 0, vendorCode: row.vendorCode, skus: [] };
       agg.qtyAvailable += row.qtyAvailable;

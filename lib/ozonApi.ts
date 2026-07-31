@@ -383,3 +383,70 @@ export async function fetchOzonClusters(marketplaceId: string): Promise<OzonClus
   }
   return rows;
 }
+
+export type OzonProductAttributes = {
+  offerId: string;
+  ozonSku: string | null;
+  weightG: number | null;
+  lengthMm: number | null;
+  widthMm: number | null;
+  heightMm: number | null;
+};
+
+type AttributesResponse = {
+  result: {
+    offer_id: string;
+    sku?: number;
+    weight?: number;
+    weight_unit?: string;
+    height?: number;
+    width?: number;
+    depth?: number;
+    dimension_unit?: string;
+  }[];
+  last_id?: string;
+  total?: number;
+};
+
+/**
+ * Полный каталог товаров продавца (не только те, у кого есть остаток на
+ * FBO — в отличие от fetchOzonStocks) вместе с реальными вес/габаритами
+ * упаковки от самой площадки — единственный источник этих данных у Ozon,
+ * /v3/product/info/list их не отдаёт (там только расчётный volume_weight).
+ * Курсорная пагинация через last_id, проверено вживую: лимит 100 отдаёт
+ * весь каталог за 1-2 страницы даже на 150+ товаров.
+ */
+export async function fetchOzonProductAttributes(marketplaceId: string): Promise<OzonProductAttributes[]> {
+  const rows: OzonProductAttributes[] = [];
+  let lastId = "";
+  const limit = 100;
+
+  for (;;) {
+    const page = await ozonPost<AttributesResponse>(marketplaceId, "/v4/product/info/attributes", {
+      filter: {},
+      limit,
+      last_id: lastId,
+    });
+
+    for (const p of page.result) {
+      // Единицы почти всегда "g"/"mm" — но на всякий случай не додумываем
+      // конвертацию для других единиц (проще пропустить значение, чем
+      // тихо посчитать неверно), см. weight_unit/dimension_unit.
+      const weightG = p.weight_unit === "g" || !p.weight_unit ? p.weight ?? null : null;
+      const isMm = p.dimension_unit === "mm" || !p.dimension_unit;
+      rows.push({
+        offerId: p.offer_id,
+        ozonSku: p.sku ? String(p.sku) : null,
+        weightG: weightG ?? null,
+        lengthMm: isMm ? p.depth ?? null : null,
+        widthMm: isMm ? p.width ?? null : null,
+        heightMm: isMm ? p.height ?? null : null,
+      });
+    }
+
+    if (!page.last_id || page.result.length < limit) break;
+    lastId = page.last_id;
+  }
+
+  return rows;
+}
