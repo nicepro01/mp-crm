@@ -260,6 +260,11 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
       mpSku: row.ozonSku,
       barcode: null,
       name: row.vendorCode || null,
+      // mpSku у Ozon — числовой ID площадки, свой для каждого магазина
+      // продавца; vendorCode (артикул продавца) — то немногое, что может
+      // совпадать между двумя магазинами Ozon одного продавца, поэтому
+      // передаём его отдельно для доп. попытки сопоставления по Product.vendorCode.
+      vendorCode: row.vendorCode || null,
     });
 
     const matchedProductId =

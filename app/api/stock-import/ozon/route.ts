@@ -94,6 +94,7 @@ async function POSTContent(req: NextRequest) {
       mpSku: ozonSku,
       barcode: null, // в отчётах Ozon нет штрихкода
       name: agg.vendorCode || null,
+      vendorCode: agg.vendorCode || null,
     });
 
     const matchedProductId =
