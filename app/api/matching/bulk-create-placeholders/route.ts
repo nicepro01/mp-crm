@@ -1,24 +1,30 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getApiTenantSession, unauthorizedResponse } from "@/lib/session";
 import { runWithTenant, getCurrentCompanyId } from "@/lib/tenantContext";
 
 /**
- * Массовое создание товаров-заглушек по всем текущим PENDING позициям
+ * Массовое создание товаров-заглушек по текущим PENDING позициям
  * сопоставления: SKU и название берутся из площадки, вес/габариты — 1
  * как явная заглушка (в отчётах площадок таких данных нет). Каждая
  * позиция сразу привязывается к созданному товару. Пользователь потом
  * донастраивает реальные габариты у получившихся товаров вручную.
+ * Необязательный marketplaceId в теле — ограничить только одним магазином
+ * (напр. только что подключённым вторым Ozon), не трогая PENDING других
+ * площадок; без него — поведение как раньше, по всем сразу.
  */
-export async function POST() {
+export async function POST(req: NextRequest) {
   const session = await getApiTenantSession();
   if (!session) return unauthorizedResponse();
-  return runWithTenant(session, () => POSTContent());
+  return runWithTenant(session, () => POSTContent(req));
 }
 
-async function POSTContent() {
+async function POSTContent(req: NextRequest) {
+  const body = await req.json().catch(() => ({}));
+  const marketplaceId = typeof body?.marketplaceId === "string" ? body.marketplaceId : undefined;
+
   const pendingItems = await prisma.mpImportItem.findMany({
-    where: { status: "PENDING" },
+    where: { status: "PENDING", ...(marketplaceId ? { marketplaceId } : {}) },
   });
 
   let created = 0;
