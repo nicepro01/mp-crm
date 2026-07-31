@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireTenantSession } from "@/lib/session";
 import { runWithTenant } from "@/lib/tenantContext";
 import MarketplaceForm from "../MarketplaceForm";
+import ExportProductsButton from "../ExportProductsButton";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +31,7 @@ async function EditMarketplacePageContent(params: { id: string }) {
         usedCodes={existing.map((m) => m.code)}
         initial={{ id: marketplace.id, code: marketplace.code, name: marketplace.name }}
       />
+      <ExportProductsButton marketplaceId={marketplace.id} marketplaceName={marketplace.name} />
     </div>
   );
 }
