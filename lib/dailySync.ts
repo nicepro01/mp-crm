@@ -31,46 +31,49 @@ async function tryRun(fn: () => Promise<unknown>): Promise<SubSyncResult> {
 // сессией/компанией не работает.
 export async function runFullWbSync(): Promise<FullMarketplaceSyncResult> {
   const rows = await prisma.marketplace.findMany({ where: { code: "WB" } });
-  const out: FullMarketplaceSyncResult = {};
-  for (const marketplace of rows) {
-    out[marketplace.id] = {
-      name: marketplace.name,
-      results: {
+  // Магазины одного кода синкаются ПАРАЛЛЕЛЬНО (не по очереди) — каждый
+  // магазин это независимый API-аккаунт, конкуренции за общий рейт-лимит
+  // между ними нет. Последовательно остаются только под-синки ВНУТРИ одного
+  // магазина (см. комментарии в lib/unitEconomicsSync.ts про обрыв
+  // соединения при Promise.all тяжёлых запросов). Без этого второй магазин
+  // той же площадки удваивает общее время и упирается в лимит Vercel (300с
+  // на Hobby) — реальный инцидент, не гипотеза.
+  const entries = await Promise.all(
+    rows.map(async (marketplace) => {
+      const results = {
         unitEconomics: await tryRun(() => syncWbUnitEconomics(marketplace)),
         funnel: await tryRun(() => syncWbDailyFunnel(marketplace)),
         seasonality: await tryRun(() => syncSeasonalityFromWb(marketplace)),
         stockImport: await tryRun(() => syncWbStockImport(marketplace)),
         returns: await tryRun(() => syncWbReturns(marketplace)),
-      },
-    };
-  }
-  return out;
+      };
+      return [marketplace.id, { name: marketplace.name, results }] as const;
+    })
+  );
+  return Object.fromEntries(entries);
 }
 
 export async function runFullOzonSync(): Promise<FullMarketplaceSyncResult> {
   const rows = await prisma.marketplace.findMany({ where: { code: "OZON" } });
-  const out: FullMarketplaceSyncResult = {};
-  for (const marketplace of rows) {
-    out[marketplace.id] = {
-      name: marketplace.name,
-      results: {
+  const entries = await Promise.all(
+    rows.map(async (marketplace) => {
+      const results = {
         unitEconomics: await tryRun(() => syncOzonUnitEconomics(marketplace)),
         funnel: await tryRun(() => syncOzonDailyFunnel(marketplace)),
         seasonality: await tryRun(() => syncSeasonalityFromOzon(marketplace)),
         stockImport: await tryRun(() => syncOzonStockImport(marketplace)),
-      },
-    };
-  }
-  return out;
+      };
+      return [marketplace.id, { name: marketplace.name, results }] as const;
+    })
+  );
+  return Object.fromEntries(entries);
 }
 
 export async function runFullYandexSync(): Promise<FullMarketplaceSyncResult> {
   const rows = await prisma.marketplace.findMany({ where: { code: "YANDEX_MARKET" } });
-  const out: FullMarketplaceSyncResult = {};
-  for (const marketplace of rows) {
-    out[marketplace.id] = {
-      name: marketplace.name,
-      results: {
+  const entries = await Promise.all(
+    rows.map(async (marketplace) => {
+      const results = {
         unitEconomics: await tryRun(() => syncYandexUnitEconomics(marketplace)),
         // monthsBack=1 — тот же последний завершённый месяц, что и у ручной
         // кнопки в FunnelChartWidget.tsx; ежедневный запуск просто пересчитывает
@@ -79,8 +82,9 @@ export async function runFullYandexSync(): Promise<FullMarketplaceSyncResult> {
         funnel: await tryRun(() => syncYandexFunnelBackfill(marketplace, 1)),
         seasonality: await tryRun(() => syncSeasonalityFromYandexMarket(marketplace)),
         stockImport: await tryRun(() => syncYandexStockImport(marketplace)),
-      },
-    };
-  }
-  return out;
+      };
+      return [marketplace.id, { name: marketplace.name, results }] as const;
+    })
+  );
+  return Object.fromEntries(entries);
 }
