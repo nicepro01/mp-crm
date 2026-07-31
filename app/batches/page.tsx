@@ -3,6 +3,7 @@ import { requireTenantSession } from "@/lib/session";
 import { runWithTenant } from "@/lib/tenantContext";
 import { calcBatchSummary } from "@/lib/batchCalc";
 import { EditIconLink, DeleteIconButton } from "@/app/components/RowIconActions";
+import InTransitExportButton from "./InTransitExportButton";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,7 @@ async function BatchesPageContent() {
       <div className="toolbar">
         <h1>Поставки из Китая</h1>
         <div style={{ display: "flex", gap: 8 }}>
+          <InTransitExportButton />
           <a className="btn btn-secondary" href="/batches/plan">Планировщик поставок</a>
           <a className="btn" href="/batches/new">+ Новая поставка</a>
         </div>
