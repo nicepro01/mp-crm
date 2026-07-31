@@ -307,31 +307,38 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
         update: { qtyAvailable: row.qtyAvailable, syncSource: "ozon_api", syncedAt: new Date() },
       });
 
-      // Донасыщаем реальными вес/габаритами от площадки — только если у
-      // товара сейчас стоит явная заглушка (1×1×1, см. bulk-create-placeholders),
-      // чтобы не затирать то, что уже было осознанно введено вручную.
+      // Донасыщаем реальными вес/габаритами и фото от площадки — вес/габариты
+      // только если у товара сейчас стоит явная заглушка (1×1×1, см.
+      // bulk-create-placeholders), фото — только если его вообще нет ни
+      // одной, чтобы не затирать то, что уже было осознанно введено вручную.
       const attrs = attrsByOfferId.get(row.vendorCode);
-      if (attrs && (attrs.weightG || attrs.lengthMm || attrs.widthMm || attrs.heightMm)) {
+      if (attrs) {
         const product = await prisma.product.findUnique({
           where: { id: matchedProductId },
-          select: { itemWeightG: true, itemLengthMm: true, itemWidthMm: true, itemHeightMm: true },
+          select: { itemWeightG: true, itemLengthMm: true, itemWidthMm: true, itemHeightMm: true, photoUrl: true },
         });
-        const isPlaceholder =
-          product &&
-          Number(product.itemWeightG) === 1 &&
-          product.itemLengthMm === 1 &&
-          product.itemWidthMm === 1 &&
-          product.itemHeightMm === 1;
-        if (isPlaceholder) {
-          await prisma.product.update({
-            where: { id: matchedProductId },
-            data: {
-              itemWeightG: attrs.weightG ?? 1,
-              itemLengthMm: attrs.lengthMm ?? 1,
-              itemWidthMm: attrs.widthMm ?? 1,
-              itemHeightMm: attrs.heightMm ?? 1,
-            },
-          });
+        if (product) {
+          const isPlaceholderDims =
+            Number(product.itemWeightG) === 1 &&
+            product.itemLengthMm === 1 &&
+            product.itemWidthMm === 1 &&
+            product.itemHeightMm === 1;
+          const dimsUpdate =
+            isPlaceholderDims && (attrs.weightG || attrs.lengthMm || attrs.widthMm || attrs.heightMm)
+              ? {
+                  itemWeightG: attrs.weightG ?? 1,
+                  itemLengthMm: attrs.lengthMm ?? 1,
+                  itemWidthMm: attrs.widthMm ?? 1,
+                  itemHeightMm: attrs.heightMm ?? 1,
+                }
+              : {};
+          const photoUpdate = !product.photoUrl && attrs.photoUrl ? { photoUrl: attrs.photoUrl } : {};
+          if (Object.keys(dimsUpdate).length > 0 || Object.keys(photoUpdate).length > 0) {
+            await prisma.product.update({
+              where: { id: matchedProductId },
+              data: { ...dimsUpdate, ...photoUpdate },
+            });
+          }
         }
       }
 

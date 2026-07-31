@@ -391,6 +391,7 @@ export type OzonProductAttributes = {
   lengthMm: number | null;
   widthMm: number | null;
   heightMm: number | null;
+  photoUrl: string | null;
 };
 
 type AttributesResponse = {
@@ -403,6 +404,8 @@ type AttributesResponse = {
     width?: number;
     depth?: number;
     dimension_unit?: string;
+    primary_image?: string;
+    images?: string[];
   }[];
   last_id?: string;
   total?: number;
@@ -411,10 +414,10 @@ type AttributesResponse = {
 /**
  * Полный каталог товаров продавца (не только те, у кого есть остаток на
  * FBO — в отличие от fetchOzonStocks) вместе с реальными вес/габаритами
- * упаковки от самой площадки — единственный источник этих данных у Ozon,
- * /v3/product/info/list их не отдаёт (там только расчётный volume_weight).
- * Курсорная пагинация через last_id, проверено вживую: лимит 100 отдаёт
- * весь каталог за 1-2 страницы даже на 150+ товаров.
+ * упаковки и фото от самой площадки — единственный источник вес/габаритов
+ * у Ozon, /v3/product/info/list их не отдаёт (там только расчётный
+ * volume_weight). Курсорная пагинация через last_id, проверено вживую:
+ * лимит 100 отдаёт весь каталог за 1-2 страницы даже на 150+ товаров.
  */
 export async function fetchOzonProductAttributes(marketplaceId: string): Promise<OzonProductAttributes[]> {
   const rows: OzonProductAttributes[] = [];
@@ -441,6 +444,7 @@ export async function fetchOzonProductAttributes(marketplaceId: string): Promise
         lengthMm: isMm ? p.depth ?? null : null,
         widthMm: isMm ? p.width ?? null : null,
         heightMm: isMm ? p.height ?? null : null,
+        photoUrl: p.primary_image || p.images?.[0] || null,
       });
     }
 
