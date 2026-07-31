@@ -2,9 +2,18 @@
 
 import { useState } from "react";
 
+// Ozon разбит на 4 отдельных вызова (юнит-экономика/график/сезонность/
+// остатки) — с реальными данными общий вызов на всё сразу упирался в лимит
+// времени Vercel Hobby (300с), даже когда магазины одной площадки уже шли
+// параллельно друг другу (см. lib/dailySync.ts). WB/Яндекс пока укладываются
+// в лимит одним вызовом, поэтому не разбиты. В попапе несколько эндпоинтов с
+// одинаковым label схлопываются в одну строку (см. handleClick).
 const ENDPOINTS: { key: string; label: string; path: string }[] = [
   { key: "wb", label: "WB", path: "/api/daily-sync/wb" },
-  { key: "ozon", label: "Ozon", path: "/api/daily-sync/ozon" },
+  { key: "ozon-unit-economics", label: "Ozon", path: "/api/daily-sync/ozon-unit-economics" },
+  { key: "ozon-funnel", label: "Ozon", path: "/api/daily-sync/ozon-funnel" },
+  { key: "ozon-seasonality", label: "Ozon", path: "/api/daily-sync/ozon-seasonality" },
+  { key: "ozon-stock-import", label: "Ozon", path: "/api/daily-sync/ozon-stock-import" },
   { key: "yandex", label: "Яндекс.Маркет", path: "/api/daily-sync/yandex" },
 ];
 
@@ -14,10 +23,9 @@ type MarketplaceOutcome = { label: string; ok: boolean; detail: string };
 // АБСОЛЮТНО всё (юнит-экономика, графики заказов, сезонность, остатки,
 // возвраты) сразу по всем 3 площадкам. То же самое (плюс по расписанию, для
 // всех компаний) происходит автоматически каждую ночь через Vercel Cron —
-// см. vercel.json + app/api/cron/{wb,ozon,yandex}/route.ts. Три площадки
-// идут ПАРАЛЛЕЛЬНО (тот же приём, что и в AllMarketplacesSyncForm.tsx) —
-// общее время ожидания = самая долгая из трёх (обычно Яндекс, ~2-3 минуты
-// из-за собственного жёсткого рейт-лимита площадки), а не сумма всех трёх.
+// см. vercel.json + app/api/cron/*/route.ts. Все эндпоинты идут ПАРАЛЛЕЛЬНО
+// (тот же приём, что и в AllMarketplacesSyncForm.tsx) — общее время ожидания
+// = самый долгий из них, а не сумма всех.
 export default function RefreshAllButton() {
   const [syncing, setSyncing] = useState(false);
   const [results, setResults] = useState<MarketplaceOutcome[] | null>(null);
@@ -26,13 +34,13 @@ export default function RefreshAllButton() {
     setSyncing(true);
     setResults(null);
 
-    const settled = await Promise.all(
-      ENDPOINTS.map(async ({ label, path }): Promise<MarketplaceOutcome> => {
+    const perEndpoint = await Promise.all(
+      ENDPOINTS.map(async ({ label, path }) => {
         try {
           const res = await fetch(path, { method: "POST" });
           const body = await res.json().catch(() => ({}));
           if (!res.ok) {
-            return { label, ok: false, detail: body.error ?? "Ошибка запроса" };
+            return { label, failed: [body.error ?? "Ошибка запроса"] };
           }
           // Тело — {[marketplaceId]: {name, results: {[subSync]: {ok, error?}}}}
           // (несколько строк на код возможны — напр. два магазина Ozon).
@@ -42,16 +50,25 @@ export default function RefreshAllButton() {
               .filter(([, v]) => v && v.ok === false)
               .map(([k, v]) => `${name}/${k}: ${v.error}`)
           );
-          return {
-            label,
-            ok: failed.length === 0,
-            detail: failed.length === 0 ? "готово" : failed.join("; "),
-          };
+          return { label, failed };
         } catch (err: any) {
-          return { label, ok: false, detail: err.message ?? "Не удалось выполнить запрос" };
+          return { label, failed: [err.message ?? "Не удалось выполнить запрос"] };
         }
       })
     );
+
+    // Схлопываем несколько эндпоинтов одной площадки (Ozon) в одну строку.
+    const failedByLabel = new Map<string, string[]>();
+    for (const { label, failed } of perEndpoint) {
+      const list = failedByLabel.get(label) ?? [];
+      list.push(...failed);
+      failedByLabel.set(label, list);
+    }
+    const settled: MarketplaceOutcome[] = [...failedByLabel.entries()].map(([label, failed]) => ({
+      label,
+      ok: failed.length === 0,
+      detail: failed.length === 0 ? "готово" : failed.join("; "),
+    }));
 
     setSyncing(false);
     setResults(settled);
