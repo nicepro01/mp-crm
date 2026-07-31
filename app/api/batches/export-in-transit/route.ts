@@ -3,6 +3,7 @@ import ExcelJS from "exceljs";
 import { prisma } from "@/lib/prisma";
 import { getApiTenantSession, unauthorizedResponse } from "@/lib/session";
 import { runWithTenant } from "@/lib/tenantContext";
+import { fetchPhotoPng, EXCEL_PHOTO_SIZE_PX } from "@/lib/excelPhoto";
 
 // Простой список "что едет и когда" по поставкам в статусе "В пути" — чтобы
 // скинуть сотрудникам, которые спрашивают про сроки прихода товара. Не
@@ -12,6 +13,9 @@ import { runWithTenant } from "@/lib/tenantContext";
 function fmtDate(d: Date | null): string {
   return d ? d.toLocaleDateString("ru-RU") : "";
 }
+
+const PHOTO_SIZE_PX = EXCEL_PHOTO_SIZE_PX;
+const PHOTO_ROW_HEIGHT_PT = 50;
 
 export async function GET() {
   const session = await getApiTenantSession();
@@ -26,10 +30,17 @@ async function GETContent() {
     orderBy: [{ etaDate: "asc" }, { batchNumber: "asc" }],
   });
 
+  // Фото — сетевой запрос на товар, тянем все параллельно заранее (тот же
+  // приём, что и в warehouse-export/plan-export).
+  const allItems = batches.flatMap((b) => b.items);
+  const photoBuffers = await Promise.all(allItems.map((i) => fetchPhotoPng(i.product.photoUrl)));
+  const photoByItemId = new Map(allItems.map((i, idx) => [i.id, photoBuffers[idx]]));
+
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("В пути");
 
   sheet.columns = [
+    { width: 11 }, // фото
     { width: 18 }, // накладная
     { width: 16 }, // дата отгрузки
     { width: 18 }, // ожидаемое прибытие
@@ -42,6 +53,7 @@ async function GETContent() {
 
   const headerFill: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
   const headerLabels = [
+    "Фото",
     "Накладная",
     "Дата отгрузки",
     "Ожидаемое прибытие",
@@ -56,12 +68,13 @@ async function GETContent() {
   headerRow.fill = headerFill;
 
   if (batches.length === 0) {
-    sheet.addRow(["Сейчас нет поставок в статусе «В пути»"]);
+    sheet.addRow(["", "Сейчас нет поставок в статусе «В пути»"]);
   }
 
   for (const batch of batches) {
     if (batch.items.length === 0) {
       sheet.addRow([
+        "",
         batch.batchNumber,
         fmtDate(batch.shipmentDate),
         fmtDate(batch.etaDate),
@@ -74,7 +87,8 @@ async function GETContent() {
       continue;
     }
     for (const item of batch.items) {
-      sheet.addRow([
+      const row = sheet.addRow([
+        "",
         batch.batchNumber,
         fmtDate(batch.shipmentDate),
         fmtDate(batch.etaDate),
@@ -84,6 +98,16 @@ async function GETContent() {
         item.qty,
         batch.notes ?? "",
       ]);
+      row.height = PHOTO_ROW_HEIGHT_PT;
+
+      const png = photoByItemId.get(item.id);
+      if (png) {
+        const imageId = workbook.addImage({ buffer: png as any, extension: "png" });
+        sheet.addImage(imageId, {
+          tl: { col: 0.05, row: row.number - 1 + 0.05 },
+          ext: { width: PHOTO_SIZE_PX, height: PHOTO_SIZE_PX },
+        });
+      }
     }
   }
 
