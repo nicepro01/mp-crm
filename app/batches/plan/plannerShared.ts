@@ -35,7 +35,9 @@ export type PlannerRow = {
   unitsPerBox: number;
   boxWeightKg: number;
   boxVolumeM3: number;
-  marketplaceCodes: string[];
+  // marketplaceId, а не code — два магазина одной площадки (Ozon/Ozon 2)
+  // делят один code, группировка по нему схлопывала их в одну вкладку.
+  marketplaceIds: string[];
   marketplaces: string;
   // % выкупа на WB (из последнего расчёта юнит-экономики) — единственная
   // площадка, где он сейчас считается по реальным заказам. null, если
@@ -68,12 +70,6 @@ export type SortKey =
   | "daysOfStockLeft"
   | "daysOfStockLeftAfterArrival"
   | "recommendedOrderQty";
-
-export const marketplaceLabels: Record<string, string> = {
-  WB: "Wildberries",
-  OZON: "Ozon",
-  YANDEX_MARKET: "Яндекс.Маркет",
-};
 
 export const columns: { key: SortKey; label: string; type: "string" | "number" }[] = [
   { key: "sku", label: "Товар", type: "string" },

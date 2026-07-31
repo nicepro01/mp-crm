@@ -16,12 +16,6 @@ export const dynamic = "force-dynamic";
 // если у поставщика товара не указан свой leadTimeDays (см. ниже).
 const DEFAULT_LEAD_TIME_DAYS = 120;
 
-const marketplaceLabels: Record<string, string> = {
-  WB: "Wildberries",
-  OZON: "Ozon",
-  YANDEX_MARKET: "Яндекс.Маркет",
-};
-
 export default async function BatchPlannerPage() {
   const session = await requireTenantSession();
   return runWithTenant(session, () => BatchPlannerPageContent());
@@ -36,11 +30,11 @@ async function BatchPlannerPageContent() {
   const [activeListings, allStockRows, monthlySales, buybackRows, allWarehouseRows] = await Promise.all([
     prisma.mpListing.findMany({
       where: { isActive: true, product: { isActive: true } },
-      include: { product: { include: { supplier: true } }, marketplace: { select: { code: true } } },
+      include: { product: { include: { supplier: true } }, marketplace: { select: { name: true } } },
     }),
     prisma.productStockAnalytics.findMany({
       where: { product: { isActive: true } },
-      include: { marketplace: { select: { code: true } } },
+      include: { marketplace: { select: { name: true } } },
     }),
     prisma.productMonthlySales.findMany({
       where: { product: { isActive: true } },
@@ -58,7 +52,7 @@ async function BatchPlannerPageContent() {
     // поставки внутри площадки, см. lib/allocateProportionally.ts ниже.
     prisma.productWarehouseAnalytics.findMany({
       where: { product: { isActive: true } },
-      include: { marketplace: { select: { code: true } } },
+      include: { marketplace: { select: { name: true } } },
     }),
   ]);
   const buybackByProduct = new Map<string, number>();
@@ -103,16 +97,23 @@ async function BatchPlannerPageContent() {
 
   // Аналитика должна учитываться только там, где листинг реально активен
   // (товар мог быть снят с продажи именно на этой площадке, но жив на
-  // других) — сверяем по тому же набору активных листингов.
+  // других) — сверяем по тому же набору активных листингов. Ключ —
+  // marketplaceId, а не code: два магазина одной площадки (Ozon/Ozon 2)
+  // делят один code, группировка по нему смешивала бы их данные в одну
+  // вкладку и оставляла бы только имя последнего обработанного магазина.
   const activeListingKeys = new Set(
-    activeListings.map((l) => `${l.productId}|${l.marketplace.code}`)
+    activeListings.map((l) => `${l.productId}|${l.marketplaceId}`)
   );
   const stockRows = allStockRows.filter((r) =>
-    activeListingKeys.has(`${r.productId}|${r.marketplace.code}`)
+    activeListingKeys.has(`${r.productId}|${r.marketplaceId}`)
   );
   const warehouseRows = allWarehouseRows.filter((r) =>
-    activeListingKeys.has(`${r.productId}|${r.marketplace.code}`)
+    activeListingKeys.has(`${r.productId}|${r.marketplaceId}`)
   );
+  const marketplaceNameById = new Map<string, string>();
+  for (const l of activeListings) marketplaceNameById.set(l.marketplaceId, l.marketplace.name);
+  for (const r of allStockRows) marketplaceNameById.set(r.marketplaceId, r.marketplace.name);
+  for (const r of allWarehouseRows) marketplaceNameById.set(r.marketplaceId, r.marketplace.name);
 
   const inTransitByProduct = await prisma.batchItem.groupBy({
     by: ["productId"],
@@ -137,7 +138,7 @@ async function BatchPlannerPageContent() {
     unitsPerBox: number;
     boxWeightKg: number;
     boxVolumeM3: number;
-    marketplaceCodes: Set<string>;
+    marketplaceIds: Set<string>;
   };
   const byProduct = new Map<string, Agg>();
   function ensureAgg(productId: string, product: (typeof activeListings)[number]["product"]) {
@@ -159,7 +160,7 @@ async function BatchPlannerPageContent() {
         unitsPerBox: product.unitsPerBox,
         boxWeightKg: Number(product.boxWeightKg),
         boxVolumeM3: (product.boxLengthMm * product.boxWidthMm * product.boxHeightMm) / 1_000_000_000,
-        marketplaceCodes: new Set(),
+        marketplaceIds: new Set(),
       };
       byProduct.set(productId, acc);
     }
@@ -171,7 +172,7 @@ async function BatchPlannerPageContent() {
   // (просто с нулевыми остатком/продажами вместо реальных цифр).
   for (const l of activeListings) {
     const acc = ensureAgg(l.productId, l.product);
-    acc.marketplaceCodes.add(l.marketplace.code);
+    acc.marketplaceIds.add(l.marketplaceId);
   }
   // Затем добавляем реальные цифры там, где аналитика есть.
   for (const r of stockRows) {
@@ -230,9 +231,9 @@ async function BatchPlannerPageContent() {
         unitsPerBox: acc.unitsPerBox,
         boxWeightKg: acc.boxWeightKg,
         boxVolumeM3: acc.boxVolumeM3,
-        marketplaceCodes: [...acc.marketplaceCodes],
-        marketplaces: [...acc.marketplaceCodes]
-          .map((code) => marketplaceLabels[code] ?? code)
+        marketplaceIds: [...acc.marketplaceIds],
+        marketplaces: [...acc.marketplaceIds]
+          .map((id) => marketplaceNameById.get(id) ?? id)
           .sort()
           .join(", "),
       };
@@ -258,7 +259,7 @@ async function BatchPlannerPageContent() {
   const leadTimeByProduct = new Map([...byProduct.values()].map((acc) => [acc.productId, acc.leadTimeDays]));
   const moqByProduct = new Map([...byProduct.values()].map((acc) => [acc.productId, acc.moq]));
   type RawMarketplaceStat = {
-    code: string;
+    marketplaceId: string;
     qtyAvailable: number;
     avgDaily: number;
     daysOfStockLeft: number | null;
@@ -288,7 +289,7 @@ async function BatchPlannerPageContent() {
 
     const list = rawStatsByProduct.get(r.productId) ?? [];
     list.push({
-      code: r.marketplace.code,
+      marketplaceId: r.marketplaceId,
       qtyAvailable: r.qtyAvailable,
       avgDaily,
       daysOfStockLeft,
@@ -314,7 +315,7 @@ async function BatchPlannerPageContent() {
   // чтобы такие товары не проваливались на честную заглушку, а не на
   // подмешанные данные с других площадок (см. displayStats в plannerShared).
   for (const l of activeListings) {
-    (marketplaceStats[l.marketplace.code] ??= {})[l.productId] ??= {
+    (marketplaceStats[l.marketplaceId] ??= {})[l.productId] ??= {
       qtyAvailable: 0,
       avgDailySalesQty: 0,
       daysOfStockLeft: null,
@@ -336,7 +337,7 @@ async function BatchPlannerPageContent() {
       const daysOfStockLeftAfterArrival =
         s.avgDaily > 0 ? Math.round((s.qtyAvailable + qtyInTransitAllocated) / s.avgDaily) : null;
 
-      (marketplaceStats[s.code] ??= {})[productId] = {
+      (marketplaceStats[s.marketplaceId] ??= {})[productId] = {
         qtyAvailable: s.qtyAvailable,
         avgDailySalesQty: Math.round(s.avgDaily * 100) / 100,
         daysOfStockLeft: s.daysOfStockLeft,
@@ -367,7 +368,7 @@ async function BatchPlannerPageContent() {
 
   const warehouseRowsByKey = new Map<string, typeof warehouseRows>();
   for (const r of warehouseRows) {
-    const key = `${r.productId}|${r.marketplace.code}`;
+    const key = `${r.productId}|${r.marketplaceId}`;
     const list = warehouseRowsByKey.get(key) ?? [];
     list.push(r);
     warehouseRowsByKey.set(key, list);
@@ -376,12 +377,12 @@ async function BatchPlannerPageContent() {
   for (const [key, list] of warehouseRowsByKey) {
     const sep = key.indexOf("|");
     const productId = key.slice(0, sep);
-    const code = key.slice(sep + 1);
+    const marketplaceId = key.slice(sep + 1);
     // Разбивку показываем всегда, когда есть данные по складам — даже если
     // заказывать сейчас нечего (recommendedOrderQty = 0), это просто
     // информация "где физически лежит и продаётся товар", не только
     // инструмент распределения новой поставки.
-    const stat = marketplaceStats[code]?.[productId];
+    const stat = marketplaceStats[marketplaceId]?.[productId];
     const recommendedTotal = stat?.recommendedOrderQty ?? 0;
 
     let allocations: number[];
@@ -404,7 +405,7 @@ async function BatchPlannerPageContent() {
       allocations = list.map(() => 0);
     }
 
-    (warehouseStatsByProduct[code] ??= {})[productId] = list.map((r, i) => ({
+    (warehouseStatsByProduct[marketplaceId] ??= {})[productId] = list.map((r, i) => ({
       warehouseName: r.warehouseName,
       qtyAvailable: r.qtyAvailable,
       avgDailySalesQty: Math.round(Number(r.avgDailySalesQty) * 100) / 100,
@@ -423,6 +424,7 @@ async function BatchPlannerPageContent() {
         rows={rows}
         marketplaceStats={marketplaceStats}
         warehouseStatsByProduct={warehouseStatsByProduct}
+        marketplaceNames={Object.fromEntries(marketplaceNameById)}
       />
     </div>
   );

@@ -9,15 +9,10 @@ type ExportItem = {
   productId: string;
   qty: number;
   purchasePriceRub: number;
+  // Ключ — marketplaceId, а не code: два магазина одной площадки (Ozon/Ozon 2)
+  // делят один code, колонка по коду смешивала бы их количества в одну.
   marketplaceQty?: Record<string, number>;
 };
-
-const marketplaceLabels: Record<string, string> = {
-  WB: "Wildberries",
-  OZON: "Ozon",
-  YANDEX_MARKET: "Яндекс.Маркет",
-};
-const marketplaceOrder = ["WB", "OZON", "YANDEX_MARKET"];
 
 const PHOTO_SIZE_PX = EXCEL_PHOTO_SIZE_PX;
 const PHOTO_ROW_HEIGHT_PT = 50;
@@ -31,6 +26,10 @@ export async function POST(req: NextRequest) {
 async function POSTContent(req: NextRequest) {
   const body = await req.json();
   const items: ExportItem[] = Array.isArray(body.items) ? body.items : [];
+  // marketplaceId -> название (напр. "Ozon"/"Ozon 2") — приходит от клиента,
+  // где оно уже собрано из реальных строк Marketplace для этой компании.
+  const marketplaceNames: Record<string, string> =
+    body.marketplaceNames && typeof body.marketplaceNames === "object" ? body.marketplaceNames : {};
   if (items.length === 0) {
     return NextResponse.json({ error: "Нет отмеченных товаров" }, { status: 400 });
   }
@@ -43,9 +42,9 @@ async function POSTContent(req: NextRequest) {
 
   // Только те площадки, что реально встретились среди выбранных товаров —
   // не показываем пустую колонку под площадку, на которой ничего не заказываем.
-  const marketplaceCodesPresent = marketplaceOrder.filter((code) =>
-    items.some((i) => i.marketplaceQty && code in i.marketplaceQty)
-  );
+  const marketplaceIdsPresent = [
+    ...new Set(items.flatMap((i) => Object.keys(i.marketplaceQty ?? {}))),
+  ].sort((a, b) => (marketplaceNames[a] ?? a).localeCompare(marketplaceNames[b] ?? b, "ru"));
 
   type Row = {
     photoUrl: string | null;
@@ -110,7 +109,7 @@ async function POSTContent(req: NextRequest) {
     { width: 12 }, // sku
     { width: 50 }, // товар
     { width: 10 }, // кол-во общее
-    ...marketplaceCodesPresent.map(() => ({ width: 12 })),
+    ...marketplaceIdsPresent.map(() => ({ width: 12 })),
     { width: 14 }, // цена
     { width: 14 }, // сумма
     { width: 10 }, // коробок
@@ -127,7 +126,7 @@ async function POSTContent(req: NextRequest) {
     "SKU",
     "Товар",
     "Кол-во всего",
-    ...marketplaceCodesPresent.map((c) => marketplaceLabels[c] ?? c),
+    ...marketplaceIdsPresent.map((id) => marketplaceNames[id] ?? id),
     "Цена закупки, ₽",
     "Сумма, ₽",
     "Коробок",
@@ -165,7 +164,7 @@ async function POSTContent(req: NextRequest) {
         r.sku,
         r.name,
         r.qty,
-        ...marketplaceCodesPresent.map((c) => r.marketplaceQty[c] ?? ""),
+        ...marketplaceIdsPresent.map((id) => r.marketplaceQty[id] ?? ""),
         r.price,
         r.sum,
         r.boxes,
@@ -196,7 +195,7 @@ async function POSTContent(req: NextRequest) {
       "",
       "Итого по поставщику",
       subQty,
-      ...marketplaceCodesPresent.map(() => ""),
+      ...marketplaceIdsPresent.map(() => ""),
       "",
       Math.round(subSum * 100) / 100,
       subBoxes,
@@ -220,7 +219,7 @@ async function POSTContent(req: NextRequest) {
     "",
     "ИТОГО ПО ВСЕЙ ПОСТАВКЕ",
     grandQty,
-    ...marketplaceCodesPresent.map(() => ""),
+    ...marketplaceIdsPresent.map(() => ""),
     "",
     Math.round(grandSum * 100) / 100,
     grandBoxes,

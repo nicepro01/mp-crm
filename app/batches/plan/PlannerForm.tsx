@@ -11,7 +11,6 @@ import {
   PlannerRow,
   MarketplaceStat,
   SortKey,
-  marketplaceLabels,
   columns,
   fmt,
   displayStats,
@@ -40,10 +39,14 @@ export default function PlannerForm({
   rows,
   marketplaceStats,
   warehouseStatsByProduct,
+  marketplaceNames,
 }: {
   rows: PlannerRow[];
   marketplaceStats: Record<string, Record<string, MarketplaceStat>>;
   warehouseStatsByProduct: Record<string, Record<string, WarehouseStat[]>>;
+  // marketplaceId -> название магазина (напр. "Ozon"/"Ozon 2") — площадки с
+  // одинаковым code иначе неотличимы на вкладках/в выгрузке.
+  marketplaceNames: Record<string, string>;
 }) {
   const router = useRouter();
   const [lines, setLines] = useState<Record<string, LineState>>(() =>
@@ -145,7 +148,7 @@ export default function PlannerForm({
   function renderTable(
     tabRows: PlannerRow[],
     statsOverride?: Record<string, MarketplaceStat>,
-    marketplaceCode?: string
+    marketplaceId?: string
   ) {
     const sorted = sortRows(tabRows, sortKey, sortDir, statsOverride, pinned);
     const subtotal = groupSubtotal(sorted, statsOverride);
@@ -198,10 +201,10 @@ export default function PlannerForm({
                   : warning
                   ? "rgba(245, 158, 11, 0.12)"
                   : undefined;
-                const warehouseStats = marketplaceCode
-                  ? warehouseStatsByProduct[marketplaceCode]?.[r.productId]
+                const warehouseStats = marketplaceId
+                  ? warehouseStatsByProduct[marketplaceId]?.[r.productId]
                   : undefined;
-                const expandKey = `${marketplaceCode ?? "all"}|${r.productId}`;
+                const expandKey = `${marketplaceId ?? "all"}|${r.productId}`;
                 const isExpanded = expandedWarehouses.has(expandKey);
                 return (
                   <Fragment key={r.productId}>
@@ -360,9 +363,12 @@ export default function PlannerForm({
     );
   }
 
-  const marketplaceCodesPresent = useMemo(
-    () => [...new Set(rows.flatMap((r) => r.marketplaceCodes))].sort(),
-    [rows]
+  const marketplaceIdsPresent = useMemo(
+    () =>
+      [...new Set(rows.flatMap((r) => r.marketplaceIds))].sort((a, b) =>
+        (marketplaceNames[a] ?? a).localeCompare(marketplaceNames[b] ?? b, "ru")
+      ),
+    [rows, marketplaceNames]
   );
 
   const totals = useMemo(() => {
@@ -394,8 +400,8 @@ export default function PlannerForm({
     // закупщик видит, сколько из общего количества уйдёт на каждый канал.
     const items = selectedRows.map((r) => {
       const marketplaceQty: Record<string, number> = {};
-      for (const code of r.marketplaceCodes) {
-        marketplaceQty[code] = displayStats(r, marketplaceStats[code]).recommendedOrderQty;
+      for (const marketplaceId of r.marketplaceIds) {
+        marketplaceQty[marketplaceId] = displayStats(r, marketplaceStats[marketplaceId]).recommendedOrderQty;
       }
       return {
         productId: r.productId,
@@ -409,7 +415,7 @@ export default function PlannerForm({
     const res = await fetch("/api/batches/plan/export", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items }),
+      body: JSON.stringify({ items, marketplaceNames }),
     });
     setExporting(false);
 
@@ -469,12 +475,12 @@ export default function PlannerForm({
 
   const tabs = [
     { key: "all", label: `Общая (${rows.length})`, content: renderTable(rows) },
-    ...marketplaceCodesPresent.map((code) => {
-      const tabRows = rows.filter((r) => r.marketplaceCodes.includes(code));
+    ...marketplaceIdsPresent.map((marketplaceId) => {
+      const tabRows = rows.filter((r) => r.marketplaceIds.includes(marketplaceId));
       return {
-        key: code,
-        label: `${marketplaceLabels[code] ?? code} (${tabRows.length})`,
-        content: renderTable(tabRows, marketplaceStats[code], code),
+        key: marketplaceId,
+        label: `${marketplaceNames[marketplaceId] ?? marketplaceId} (${tabRows.length})`,
+        content: renderTable(tabRows, marketplaceStats[marketplaceId], marketplaceId),
       };
     }),
   ];

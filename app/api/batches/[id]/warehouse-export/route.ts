@@ -17,12 +17,6 @@ import { computeSeasonalIndex, seasonalWeightForWindow } from "@/lib/seasonality
 // единственный сигнал, который есть, когда продаж нет вообще.
 const DEFAULT_LEAD_TIME_DAYS = 120;
 
-const marketplaceLabels: Record<string, string> = {
-  WB: "Wildberries",
-  OZON: "Ozon",
-  YANDEX_MARKET: "Яндекс.Маркет",
-};
-
 const PHOTO_SIZE_PX = EXCEL_PHOTO_SIZE_PX;
 const PHOTO_ROW_HEIGHT_PT = 50;
 
@@ -52,15 +46,15 @@ async function GETContent(req: NextRequest, { params }: { params: { id: string }
   const [listings, stockAnalytics, warehouseAnalytics, monthlySales] = await Promise.all([
     prisma.mpListing.findMany({
       where: { productId: { in: productIds }, isActive: true },
-      include: { marketplace: { select: { code: true } } },
+      include: { marketplace: { select: { name: true } } },
     }),
     prisma.productStockAnalytics.findMany({
       where: { productId: { in: productIds } },
-      include: { marketplace: { select: { code: true } } },
+      include: { marketplace: { select: { name: true } } },
     }),
     prisma.productWarehouseAnalytics.findMany({
       where: { productId: { in: productIds } },
-      include: { marketplace: { select: { code: true } } },
+      include: { marketplace: { select: { name: true } } },
     }),
     prisma.productMonthlySales.findMany({
       where: { productId: { in: productIds } },
@@ -68,16 +62,23 @@ async function GETContent(req: NextRequest, { params }: { params: { id: string }
     }),
   ]);
 
-  const codesByProduct = new Map<string, Set<string>>();
+  // Ключ — marketplaceId, а не code: два магазина одной площадки (Ozon/Ozon 2)
+  // делят один code, группировка по нему смешивала бы их остатки/продажи.
+  const marketplaceNameById = new Map<string, string>();
+  for (const l of listings) marketplaceNameById.set(l.marketplaceId, l.marketplace.name);
+  for (const s of stockAnalytics) marketplaceNameById.set(s.marketplaceId, s.marketplace.name);
+  for (const w of warehouseAnalytics) marketplaceNameById.set(w.marketplaceId, w.marketplace.name);
+
+  const marketplaceIdsByProduct = new Map<string, Set<string>>();
   for (const l of listings) {
-    const set = codesByProduct.get(l.productId) ?? new Set<string>();
-    set.add(l.marketplace.code);
-    codesByProduct.set(l.productId, set);
+    const set = marketplaceIdsByProduct.get(l.productId) ?? new Set<string>();
+    set.add(l.marketplaceId);
+    marketplaceIdsByProduct.set(l.productId, set);
   }
 
   const stockByKey = new Map<string, { qtyAvailable: number; avgDaily: number }>();
   for (const s of stockAnalytics) {
-    stockByKey.set(`${s.productId}|${s.marketplace.code}`, {
+    stockByKey.set(`${s.productId}|${s.marketplaceId}`, {
       qtyAvailable: s.qtyAvailable,
       avgDaily: Number(s.avgDailySalesQty),
     });
@@ -85,7 +86,7 @@ async function GETContent(req: NextRequest, { params }: { params: { id: string }
 
   const warehousesByKey = new Map<string, { warehouseName: string; qtyAvailable: number; avgDaily: number }[]>();
   for (const w of warehouseAnalytics) {
-    const key = `${w.productId}|${w.marketplace.code}`;
+    const key = `${w.productId}|${w.marketplaceId}`;
     const list = warehousesByKey.get(key) ?? [];
     list.push({
       warehouseName: w.warehouseName,
@@ -124,7 +125,7 @@ async function GETContent(req: NextRequest, { params }: { params: { id: string }
 
   for (const item of items) {
     const product = item.product;
-    const codes = [...(codesByProduct.get(item.productId) ?? [])];
+    const marketplaceIds = [...(marketplaceIdsByProduct.get(item.productId) ?? [])];
     const leadTimeDays = product.supplier?.leadTimeDays ?? DEFAULT_LEAD_TIME_DAYS;
 
     const monthlyRows = monthlySalesByProduct.get(item.productId) ?? [];
@@ -134,13 +135,13 @@ async function GETContent(req: NextRequest, { params }: { params: { id: string }
         ? seasonalWeightForWindow(seasonalIndex, today, leadTimeDays)
         : Number(product.seasonalDemandMultiplier);
 
-    const totalAvgDaily = codes.reduce(
-      (sum, code) => sum + (stockByKey.get(`${item.productId}|${code}`)?.avgDaily ?? 0),
+    const totalAvgDaily = marketplaceIds.reduce(
+      (sum, marketplaceId) => sum + (stockByKey.get(`${item.productId}|${marketplaceId}`)?.avgDaily ?? 0),
       0
     );
     const noSalesData = totalAvgDaily <= 0;
 
-    if (codes.length === 0) {
+    if (marketplaceIds.length === 0) {
       // Не выставлен активно ни на одной площадке — распределять физически
       // некуда, показываем как есть, без разбивки.
       results.push({
@@ -158,30 +159,30 @@ async function GETContent(req: NextRequest, { params }: { params: { id: string }
       continue;
     }
 
-    const totalQtyAvailableAllMarketplaces = codes.reduce(
-      (sum, code) => sum + (stockByKey.get(`${item.productId}|${code}`)?.qtyAvailable ?? 0),
+    const totalQtyAvailableAllMarketplaces = marketplaceIds.reduce(
+      (sum, marketplaceId) => sum + (stockByKey.get(`${item.productId}|${marketplaceId}`)?.qtyAvailable ?? 0),
       0
     );
 
-    const mpWeights = codes.map((code) => {
-      const stat = stockByKey.get(`${item.productId}|${code}`);
+    const mpWeights = marketplaceIds.map((marketplaceId) => {
+      const stat = stockByKey.get(`${item.productId}|${marketplaceId}`);
       const avgDaily = stat?.avgDaily ?? 0;
       const qtyAvailable = stat?.qtyAvailable ?? 0;
       // Нет продаж вообще нигде — ориентируемся на выравнивание остатка
       // между площадками (то же допущение, что и на уровне склада ниже),
       // а не на несуществующий спрос.
-      const target = !noSalesData ? avgDaily * leadTimeDays * seasonalValue : totalQtyAvailableAllMarketplaces / codes.length;
+      const target = !noSalesData ? avgDaily * leadTimeDays * seasonalValue : totalQtyAvailableAllMarketplaces / marketplaceIds.length;
       return Math.max(0, target - qtyAvailable);
     });
     const mpAllocations = allocateProportionally(item.qty, mpWeights);
 
     const distribution: DistRow[] = [];
-    codes.forEach((code, i) => {
+    marketplaceIds.forEach((marketplaceId, i) => {
       const mpQty = mpAllocations[i];
       if (mpQty <= 0) return;
-      const marketplaceLabel = marketplaceLabels[code] ?? code;
-      const mpStat = stockByKey.get(`${item.productId}|${code}`);
-      const warehouses = warehousesByKey.get(`${item.productId}|${code}`) ?? [];
+      const marketplaceLabel = marketplaceNameById.get(marketplaceId) ?? marketplaceId;
+      const mpStat = stockByKey.get(`${item.productId}|${marketplaceId}`);
+      const warehouses = warehousesByKey.get(`${item.productId}|${marketplaceId}`) ?? [];
 
       if (warehouses.length === 0) {
         distribution.push({
