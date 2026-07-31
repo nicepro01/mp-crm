@@ -22,6 +22,12 @@ const FIELDS_BY_CODE: Record<string, { key: string; label: string; type?: string
   OZON: [
     { key: "clientId", label: "Client-Id" },
     { key: "apiKey", label: "Api-Key", type: "password" },
+    // Отдельная авторизация Performance API (кабинет "Продвижение") —
+    // нужна только для реального расхода на рекламу по каждому товару,
+    // необязательна: без неё расход на клики продолжит попадать в общий
+    // "unattributed" котёл, как и раньше.
+    { key: "perfClientId", label: "Client-Id (Performance API, реклама по товарам, необязательно)" },
+    { key: "perfClientSecret", label: "Client-Secret (Performance API, необязательно)", type: "password" },
   ],
   YANDEX_MARKET: [
     { key: "token", label: "API-токен", type: "password" },

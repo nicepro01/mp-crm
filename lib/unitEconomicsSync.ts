@@ -3,6 +3,7 @@ import { prisma } from "./prisma";
 import { getCurrentCompanyId } from "./tenantContext";
 import { fetchWbNmIdToVendorCode, fetchWbFinanceReport, fetchWbOrders, fetchWbAdSpendByNmId } from "./wbApi";
 import { fetchOzonStocks, fetchOzonFinanceTransactions } from "./ozonApi";
+import { fetchOzonPerformanceAdSpendBySku } from "./ozonPerformanceApi";
 import {
   fetchYandexGoodsRealizationBothCampaigns,
   fetchYandexServicesReport,
@@ -247,6 +248,13 @@ export async function syncWbUnitEconomics(marketplace: Marketplace) {
 const OZON_REPORT_WINDOW_DAYS = 29;
 
 const OZON_AD_OPERATION_NAMES = new Set(["Оплата за клик", "Продвижение с оплатой за заказ", "Продвижение бренда"]);
+// Эти два вида рекламы никогда не несут sku в фиде транзакций (проверено
+// эмпирически) — раньше весь их расход падал в общий unattributed котёл и
+// размазывался по всем товарам пропорционально выручке. Если для магазина
+// настроен Ozon Performance API (см. lib/ozonPerformanceApi.ts), реальный
+// расход по каждому SKU получаем оттуда и НЕ добавляем эти операции в котёл
+// повторно — иначе расход посчитался бы дважды.
+const OZON_CLICK_AD_OPERATION_NAMES = new Set(["Оплата за клик", "Продвижение с оплатой за заказ"]);
 const OZON_STORAGE_OPERATION_NAME = "Услуга размещения товаров на складе";
 const OZON_ACQUIRING_OPERATION_NAME = "Оплата эквайринга";
 
@@ -259,6 +267,9 @@ export async function syncOzonUnitEconomics(marketplace: Marketplace) {
   // в самих транзакциях artikula нет, только числовой sku Ozon.
   const stocks = await fetchOzonStocks(marketplace.id);
   const transactions = await fetchOzonFinanceTransactions(marketplace.id, dateFrom.toISOString(), dateTo.toISOString());
+  // null, если для магазина не настроены Performance API credentials —
+  // тогда оставляем старое поведение (клики уходят в unattributed котёл).
+  const perfAdsBySku = await fetchOzonPerformanceAdSpendBySku(marketplace.id, dateFrom, dateTo).catch(() => null);
 
   const vendorCodeBySku = new Map<number, string>();
   for (const s of stocks) {
@@ -307,6 +318,9 @@ export async function syncOzonUnitEconomics(marketplace: Marketplace) {
 
   for (const t of transactions) {
     if (t.skus.length === 0) {
+      // Реальный расход на эти клики уже есть по SKU из Performance API —
+      // не дублируем его через общий котёл.
+      if (perfAdsBySku && OZON_CLICK_AD_OPERATION_NAMES.has(t.operationType)) continue;
       unattributedAmountRub += t.amount;
       unattributedOperations++;
       const cat = unattributedByCategory.get(t.operationType) ?? { amount: 0, count: 0 };
@@ -341,6 +355,21 @@ export async function syncOzonUnitEconomics(marketplace: Marketplace) {
       } else {
         agg.otherFeesRub += Math.abs(perUnitAmount);
       }
+    }
+  }
+
+  // Реальный расход на клики по SKU (Performance API) — добавляем и в
+  // adsRub (для отображения разбивки), и в totalAmountRub (иначе выплата/
+  // маржа не почувствуют этот расход вообще, раз он больше не идёт через
+  // unattributed котёл). SKU без продаж/возвратов в этом окне (нет agg)
+  // пропускаем — как и остальные товары без активности за период, они не
+  // попадают в юнит-экономику этого цикла.
+  if (perfAdsBySku) {
+    for (const [sku, spendRub] of perfAdsBySku) {
+      const agg = bySku.get(sku);
+      if (!agg) continue;
+      agg.adsRub += spendRub;
+      agg.totalAmountRub -= spendRub;
     }
   }
 
@@ -412,7 +441,7 @@ export async function syncOzonUnitEconomics(marketplace: Marketplace) {
         sellPriceRub,
         netMarginRub,
         netMarginPct,
-        details: { quantitySold: agg.quantitySold, windowDays: OZON_REPORT_WINDOW_DAYS, source: "v3/finance/transaction/list" },
+        details: { quantitySold: agg.quantitySold, windowDays: OZON_REPORT_WINDOW_DAYS, source: "v3/finance/transaction/list", adsSource: perfAdsBySku ? "performance_api" : "unattributed_allocation" },
       },
       update: {
         cogsRub,
@@ -430,7 +459,7 @@ export async function syncOzonUnitEconomics(marketplace: Marketplace) {
         sellPriceRub,
         netMarginRub,
         netMarginPct,
-        details: { quantitySold: agg.quantitySold, windowDays: OZON_REPORT_WINDOW_DAYS, source: "v3/finance/transaction/list" },
+        details: { quantitySold: agg.quantitySold, windowDays: OZON_REPORT_WINDOW_DAYS, source: "v3/finance/transaction/list", adsSource: perfAdsBySku ? "performance_api" : "unattributed_allocation" },
         calculatedAt: new Date(),
       },
     });
