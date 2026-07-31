@@ -323,7 +323,7 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
       if (attrs) {
         const product = await prisma.product.findUnique({
           where: { id: matchedProductId },
-          select: { name: true, itemWeightG: true, itemLengthMm: true, itemWidthMm: true, itemHeightMm: true, photoUrl: true },
+          select: { name: true, vendorCode: true, itemWeightG: true, itemLengthMm: true, itemWidthMm: true, itemHeightMm: true, photoUrl: true },
         });
         if (product) {
           const isPlaceholderDims =
@@ -345,11 +345,29 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
             product.name === row.vendorCode && attrs.name && attrs.name !== row.vendorCode
               ? { name: attrs.name }
               : {};
-          if (Object.keys(dimsUpdate).length > 0 || Object.keys(photoUpdate).length > 0 || Object.keys(nameUpdate).length > 0) {
-            await prisma.product.update({
-              where: { id: matchedProductId },
-              data: { ...dimsUpdate, ...photoUpdate, ...nameUpdate },
-            });
+          // Артикул продавца — раньше заполнялся только у товаров, заведённых
+          // вручную; заглушки, созданные из PENDING-позиций площадки, его не
+          // получали (bulk-create-placeholders не знал о нём), из-за чего
+          // сопоставление по vendorCode (второй магазин той же площадки,
+          // сверка со списком поставщика и т.д.) их не находило.
+          const vendorCodeUpdate = !product.vendorCode && row.vendorCode ? { vendorCode: row.vendorCode } : {};
+          if (
+            Object.keys(dimsUpdate).length > 0 ||
+            Object.keys(photoUpdate).length > 0 ||
+            Object.keys(nameUpdate).length > 0 ||
+            Object.keys(vendorCodeUpdate).length > 0
+          ) {
+            try {
+              await prisma.product.update({
+                where: { id: matchedProductId },
+                data: { ...dimsUpdate, ...photoUpdate, ...nameUpdate, ...vendorCodeUpdate },
+              });
+            } catch (err: any) {
+              // P2002 на vendorCode — этот артикул уже занят другим товаром
+              // компании (дубль карточки); не роняем весь синк из-за одной
+              // строки, донасыщение остальных полей просто пропускаем для неё.
+              if (err?.code !== "P2002") throw err;
+            }
           }
         }
       }
