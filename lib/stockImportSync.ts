@@ -277,11 +277,17 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
   const stockAggByProduct = new Map<string, StockAgg>();
 
   for (const row of rows) {
+    const rowAttrs = attrsByOfferId.get(row.vendorCode);
     const outcome = await upsertImportItem({
       marketplaceId: marketplace.id,
       mpSku: row.ozonSku,
       barcode: null,
-      name: row.vendorCode || null,
+      // Человеческое название товара — из /v4/product/info/attributes, если
+      // есть (используется при создании карточки-заглушки, см.
+      // bulk-create-placeholders); раньше сюда шёл голый vendorCode, и
+      // заглушки получали в название просто набор цифр/кода вместо
+      // нормального описания.
+      name: rowAttrs?.name || row.vendorCode || null,
       // mpSku у Ozon — числовой ID площадки, свой для каждого магазина
       // продавца; vendorCode (артикул продавца) — то немногое, что может
       // совпадать между двумя магазинами Ozon одного продавца, поэтому
@@ -307,15 +313,17 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
         update: { qtyAvailable: row.qtyAvailable, syncSource: "ozon_api", syncedAt: new Date() },
       });
 
-      // Донасыщаем реальными вес/габаритами и фото от площадки — вес/габариты
-      // только если у товара сейчас стоит явная заглушка (1×1×1, см.
-      // bulk-create-placeholders), фото — только если его вообще нет ни
-      // одной, чтобы не затирать то, что уже было осознанно введено вручную.
+      // Донасыщаем реальными вес/габаритами, фото и названием от площадки —
+      // вес/габариты только если у товара сейчас стоит явная заглушка
+      // (1×1×1, см. bulk-create-placeholders), фото — только если его
+      // вообще нет, название — только если сейчас оно в точности равно
+      // артикулу (так раньше ошибочно называли заглушки, см. выше), чтобы
+      // не затирать то, что уже было осознанно введено вручную.
       const attrs = attrsByOfferId.get(row.vendorCode);
       if (attrs) {
         const product = await prisma.product.findUnique({
           where: { id: matchedProductId },
-          select: { itemWeightG: true, itemLengthMm: true, itemWidthMm: true, itemHeightMm: true, photoUrl: true },
+          select: { name: true, itemWeightG: true, itemLengthMm: true, itemWidthMm: true, itemHeightMm: true, photoUrl: true },
         });
         if (product) {
           const isPlaceholderDims =
@@ -333,10 +341,14 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
                 }
               : {};
           const photoUpdate = !product.photoUrl && attrs.photoUrl ? { photoUrl: attrs.photoUrl } : {};
-          if (Object.keys(dimsUpdate).length > 0 || Object.keys(photoUpdate).length > 0) {
+          const nameUpdate =
+            product.name === row.vendorCode && attrs.name && attrs.name !== row.vendorCode
+              ? { name: attrs.name }
+              : {};
+          if (Object.keys(dimsUpdate).length > 0 || Object.keys(photoUpdate).length > 0 || Object.keys(nameUpdate).length > 0) {
             await prisma.product.update({
               where: { id: matchedProductId },
-              data: { ...dimsUpdate, ...photoUpdate },
+              data: { ...dimsUpdate, ...photoUpdate, ...nameUpdate },
             });
           }
         }

@@ -387,6 +387,7 @@ export async function fetchOzonClusters(marketplaceId: string): Promise<OzonClus
 export type OzonProductAttributes = {
   offerId: string;
   ozonSku: string | null;
+  name: string | null;
   weightG: number | null;
   lengthMm: number | null;
   widthMm: number | null;
@@ -398,6 +399,7 @@ type AttributesResponse = {
   result: {
     offer_id: string;
     sku?: number;
+    name?: string;
     weight?: number;
     weight_unit?: string;
     height?: number;
@@ -440,6 +442,7 @@ export async function fetchOzonProductAttributes(marketplaceId: string): Promise
       rows.push({
         offerId: p.offer_id,
         ozonSku: p.sku ? String(p.sku) : null,
+        name: p.name || null,
         weightG: weightG ?? null,
         lengthMm: isMm ? p.depth ?? null : null,
         widthMm: isMm ? p.width ?? null : null,
