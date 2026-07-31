@@ -36,7 +36,8 @@ async function ProductsPageContent() {
         productId: true,
         mpSku: true,
         isActive: true,
-        marketplace: { select: { code: true, name: true } },
+        marketplaceId: true,
+        marketplace: { select: { name: true } },
       },
     }),
   ]);
@@ -53,9 +54,12 @@ async function ProductsPageContent() {
 
   const marketplacesByProduct = new Map<string, Set<string>>();
   // Отдельно — id товаров по каждой площадке, чтобы построить вкладки
-  // Ozon/WB/Яндекс.Маркет ниже (только те площадки, где реально есть листинги).
-  const productIdsByMarketplaceCode = new Map<string, Set<string>>();
-  const marketplaceNameByCode = new Map<string, string>();
+  // Ozon/WB/Яндекс.Маркет ниже (только те площадки, где реально есть
+  // листинги). Ключ — marketplaceId, а не code: два магазина одной площадки
+  // (напр. Ozon и Ozon 2) имеют одинаковый code, и группировка по коду
+  // схлопывала их в одну вкладку, перезаписывая название последним магазином.
+  const productIdsByMarketplaceId = new Map<string, Set<string>>();
+  const marketplaceNameById = new Map<string, string>();
   // Активен ли листинг именно на этой площадке (архив на WB не значит
   // архив на Ozon/ЯМ) — используется, чтобы скрывать архивные по
   // умолчанию внутри вкладки конкретной площадки, но не терять их совсем.
@@ -72,20 +76,20 @@ async function ProductsPageContent() {
       marketplacesByProduct.set(l.productId, set);
     }
 
-    const code = l.marketplace.code;
-    marketplaceNameByCode.set(code, l.marketplace.name);
-    const idsSet = productIdsByMarketplaceCode.get(code) ?? new Set<string>();
+    const marketplaceId = l.marketplaceId;
+    marketplaceNameById.set(marketplaceId, l.marketplace.name);
+    const idsSet = productIdsByMarketplaceId.get(marketplaceId) ?? new Set<string>();
     idsSet.add(l.productId);
-    productIdsByMarketplaceCode.set(code, idsSet);
+    productIdsByMarketplaceId.set(marketplaceId, idsSet);
 
-    const activeKey = `${code}|${l.productId}`;
+    const activeKey = `${marketplaceId}|${l.productId}`;
     listingActiveByMarketplaceAndProduct.set(
       activeKey,
       l.isActive || (listingActiveByMarketplaceAndProduct.get(activeKey) ?? false)
     );
 
     if (l.isActive) {
-      const dupKey = `${code}|${l.productId}`;
+      const dupKey = `${marketplaceId}|${l.productId}`;
       const arr = listingsByMarketplaceAndProduct.get(dupKey) ?? [];
       arr.push({ mpSku: l.mpSku });
       listingsByMarketplaceAndProduct.set(dupKey, arr);
@@ -95,10 +99,10 @@ async function ProductsPageContent() {
   const duplicateListings = [...listingsByMarketplaceAndProduct.entries()]
     .filter(([, arr]) => arr.length > 1)
     .map(([dupKey, arr]) => {
-      const [code, productId] = dupKey.split("|");
+      const [marketplaceId, productId] = dupKey.split("|");
       const product = products.find((p) => p.id === productId);
       return {
-        marketplaceName: marketplaceNameByCode.get(code) ?? code,
+        marketplaceName: marketplaceNameById.get(marketplaceId) ?? marketplaceId,
         sku: product?.sku ?? productId,
         name: product?.name ?? "—",
         mpSkus: arr.map((a) => a.mpSku),
@@ -122,20 +126,20 @@ async function ProductsPageContent() {
     marketplaces: [...(marketplacesByProduct.get(p.id) ?? [])].sort().join(", "),
   }));
 
-  const marketplaceTabs = [...productIdsByMarketplaceCode.entries()].map(([code, ids]) => {
+  const marketplaceTabs = [...productIdsByMarketplaceId.entries()].map(([marketplaceId, ids]) => {
     const filteredRows = rows
       .filter((r) => ids.has(r.id))
       .map((r) => ({
         ...r,
-        listingActive: listingActiveByMarketplaceAndProduct.get(`${code}|${r.id}`) ?? true,
+        listingActive: listingActiveByMarketplaceAndProduct.get(`${marketplaceId}|${r.id}`) ?? true,
       }));
     // В счётчике вкладки показываем только активные (и глобально, и именно
     // на этой площадке) — так число совпадает с тем, что реально видно по
     // умолчанию (архивные скрыты переключателем внутри таблицы).
     const activeCount = filteredRows.filter((r) => r.isActive && r.listingActive).length;
     return {
-      key: code,
-      label: `${marketplaceNameByCode.get(code) ?? code} (${activeCount})`,
+      key: marketplaceId,
+      label: `${marketplaceNameById.get(marketplaceId) ?? marketplaceId} (${activeCount})`,
       content: <ProductsTable products={filteredRows} />,
     };
   });
