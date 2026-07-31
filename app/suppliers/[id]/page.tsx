@@ -17,7 +17,7 @@ export default async function EditSupplierPage({
 }
 
 async function EditSupplierPageContent(params: { id: string }) {
-  const [supplier, supplierPrices, purchaseHistory] = await Promise.all([
+  const [supplier, supplierPrices, purchaseHistory, mainSupplierProducts] = await Promise.all([
     prisma.supplier.findUnique({ where: { id: params.id } }),
     prisma.supplierPrice.findMany({
       where: { supplierId: params.id },
@@ -25,12 +25,24 @@ async function EditSupplierPageContent(params: { id: string }) {
       orderBy: { product: { name: "asc" } },
     }),
     getProductPurchaseHistoryForSupplier(params.id),
+    // Товары, где поставщик указан "основным" на карточке (см. Product.supplierId)
+    // — это просто заполняет поле при оформлении новой поставки, реальной
+    // закупки/прайса может ещё не быть, но пользователю нужно видеть сам факт
+    // привязки, а не только историю уже случившихся поставок.
+    prisma.product.findMany({
+      where: { supplierId: params.id },
+      orderBy: { name: "asc" },
+    }),
   ]);
   if (!supplier) notFound();
 
   const pricedProductIds = new Set(supplierPrices.map((p) => p.productId));
   const purchaseOnlyHistory = purchaseHistory.filter(
     (h) => !pricedProductIds.has(h.productId)
+  );
+  const historyProductIds = new Set(purchaseHistory.map((h) => h.productId));
+  const unorderedMainSupplierProducts = mainSupplierProducts.filter(
+    (p) => !pricedProductIds.has(p.id) && !historyProductIds.has(p.id)
   );
 
   return (
@@ -101,6 +113,34 @@ async function EditSupplierPageContent(params: { id: string }) {
                       <td>{h.lastOrderDate.toISOString().slice(0, 10)}</td>
                       <td>{h.shipmentsCount}</td>
                       <td>{h.totalQty}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {unorderedMainSupplierProducts.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div className="muted">
+              Указан основным поставщиком на карточке (поставок ещё не было):
+            </div>
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Товар</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {unorderedMainSupplierProducts.map((p) => (
+                    <tr key={p.id}>
+                      <td>
+                        <a href={`/products/${p.id}`}>
+                          {p.sku} — {p.name}
+                        </a>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
