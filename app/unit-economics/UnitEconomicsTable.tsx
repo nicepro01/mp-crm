@@ -145,6 +145,7 @@ type SortKey =
   | "cogsRub"
   | "mpCommissionPct"
   | "mpLogisticsRub"
+  | "adsRub"
   | "sellPriceRub"
   | "netMarginRub"
   | "netMarginPct"
@@ -184,6 +185,14 @@ const columns: { key: SortKey; label: string; type: "string" | "number"; descrip
     description:
       "Логистика площадки на 1 шт. Для WB — доставка (delivery_rub). Для Ozon — всё, что операция продажи вычла сверх выручки и комиссии (доставка + сопутствующие услуги этой же продажи)",
     width: 56,
+  },
+  {
+    key: "adsRub",
+    label: "Реклама",
+    type: "number",
+    description:
+      "Реальный расход на рекламу на 1 шт за период, привязанный именно к этому товару. WB — из своего API по продвижению. Ozon — «Продвижение бренда» всегда, плюс расход за клики/заказы, если для магазина подключён Performance API (Настройки → Интеграции); без него расход за клики виден только в «Расходы без привязки (оценка)»",
+    width: 54,
   },
   {
     key: "sellPriceRub",
@@ -274,7 +283,6 @@ const detailFields: { key: keyof UnitEconomicsRow; label: string; suffix?: strin
   { key: "acquiringRub", label: "Эквайринг" },
   { key: "storageRub", label: "Хранение" },
   { key: "otherFeesRub", label: "Другие услуги" },
-  { key: "adsRub", label: "Реклама" },
   { key: "taxRub", label: "Налог" },
   { key: "laborAllocRub", label: "ФОТ" },
   { key: "reverseLogisticsRub", label: "Обратная логистика, ₽" },
@@ -326,6 +334,7 @@ export default function UnitEconomicsTable({
       (acc, r) => {
         acc.cogsRub += r.cogsRub;
         acc.mpLogisticsRub += r.mpLogisticsRub;
+        acc.adsRub += r.adsRub;
         acc.sellPriceRub += r.sellPriceRub;
         acc.netMarginRub += r.netMarginRub;
         acc.returnsQty += r.returnsQty;
@@ -339,6 +348,7 @@ export default function UnitEconomicsTable({
       {
         cogsRub: 0,
         mpLogisticsRub: 0,
+        adsRub: 0,
         sellPriceRub: 0,
         netMarginRub: 0,
         returnsQty: 0,
@@ -457,6 +467,7 @@ export default function UnitEconomicsTable({
                   <td>{r.cogsRub}</td>
                   <td>{r.mpCommissionPct !== null ? `${r.mpCommissionPct}%` : "—"}</td>
                   <td>{r.mpLogisticsRub}</td>
+                  <td>{r.adsRub || "—"}</td>
                   <td>{r.sellPriceRub}</td>
                   <td className={marginCls}>{r.netMarginRub}</td>
                   <td className={marginCls}>{r.netMarginPct}%</td>
@@ -561,6 +572,7 @@ export default function UnitEconomicsTable({
             <td>{Math.round(totals.cogsRub * 100) / 100}</td>
             <td></td>
             <td>{Math.round(totals.mpLogisticsRub * 100) / 100}</td>
+            <td>{Math.round(totals.adsRub * 100) / 100}</td>
             <td>{Math.round(totals.sellPriceRub * 100) / 100}</td>
             <td className={totals.netMarginRub >= 0 ? "margin-positive" : "margin-negative"}>
               {Math.round(totals.netMarginRub * 100) / 100}
