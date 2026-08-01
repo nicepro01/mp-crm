@@ -48,6 +48,7 @@ model Company {
   productStockAnalytics     ProductStockAnalytics[]
   productClusterAnalytics   ProductClusterAnalytics[]
   productWarehouseAnalytics ProductWarehouseAnalytics[]
+  productCardHealth         ProductCardHealth[]
   productMonthlySales       ProductMonthlySales[]
   returnClaims              ReturnClaim[]
   taskColumns               TaskColumn[]
@@ -172,6 +173,7 @@ model Product {
   stockAnalytics     ProductStockAnalytics[]
   clusterAnalytics   ProductClusterAnalytics[]
   warehouseAnalytics ProductWarehouseAnalytics[]
+  cardHealth         ProductCardHealth[]
   returnClaims       ReturnClaim[]
   monthlySales       ProductMonthlySales[]
 
@@ -420,6 +422,7 @@ model Marketplace {
   stockAnalytics     ProductStockAnalytics[]
   clusterAnalytics   ProductClusterAnalytics[]
   warehouseAnalytics ProductWarehouseAnalytics[]
+  cardHealth         ProductCardHealth[]
   returnClaims       ReturnClaim[]
   monthlySales       ProductMonthlySales[]
   dailyFunnel        MarketplaceDailyFunnel[]
@@ -753,6 +756,41 @@ model ProductWarehouseAnalytics {
   @@index([productId])
   @@index([companyId])
   @@map("product_warehouse_analytics")
+}
+
+// "Здоровье карточки" на Ozon — контент-рейтинг (заполненность фото/текста/
+// атрибутов, /v1/product/rating-by-sku) и индекс цены относительно рынка
+// (/v3/product/info/list price_indexes) — оба доступны без ограничений
+// подписки, в отличие от рейтинга по отзывам покупателей (тот требует более
+// высокий тариф Ozon Premium — см. lib/ozonCardHealthSync.ts). Только Ozon:
+// у WB/Яндекса нет прямого аналога этих двух метрик через API.
+model ProductCardHealth {
+  id        String  @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  marketplaceId String
+  marketplace   Marketplace @relation(fields: [marketplaceId], references: [id])
+  productId     String
+  product       Product     @relation(fields: [productId], references: [id])
+
+  mpSku String
+
+  contentRating Int? // 0-100, заполненность карточки (фото/текст/атрибуты)
+  // Цвет индикатора цены Ozon: SUPER/GREEN/YELLOW/RED/WITHOUT_INDEX (как
+  // есть, без перевода — see ozonCardHealthSync для сопоставления с
+  // человеческими подписями).
+  priceIndexColor        String?
+  priceIndexValue        Decimal? @db.Decimal(6, 3) // наша цена / цена рынка (внешний индекс)
+  competitorMinPriceRub  Decimal? @db.Decimal(10, 2) // минимальная цена на этот товар на рынке вне Ozon
+  improveSuggestions     Json? // conditions с fulfilled=false из rating-by-sku — что поднять в контент-рейтинге
+
+  syncedAt DateTime @default(now())
+
+  @@unique([marketplaceId, mpSku])
+  @@index([productId])
+  @@index([companyId])
+  @@map("product_card_health")
 }
 
 // Помесячные продажи товара — по каждой площадке (WB/Ozon/ЯМ) отдельная

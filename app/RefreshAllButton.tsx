@@ -14,6 +14,7 @@ const ENDPOINTS: { key: string; label: string; path: string }[] = [
   { key: "ozon-funnel", label: "Ozon", path: "/api/daily-sync/ozon-funnel" },
   { key: "ozon-seasonality", label: "Ozon", path: "/api/daily-sync/ozon-seasonality" },
   { key: "ozon-stock-import", label: "Ozon", path: "/api/daily-sync/ozon-stock-import" },
+  { key: "ozon-card-health", label: "Ozon", path: "/api/daily-sync/ozon-card-health" },
   { key: "yandex", label: "Яндекс.Маркет", path: "/api/daily-sync/yandex" },
 ];
 

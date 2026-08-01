@@ -5,6 +5,7 @@
     { "path": "/api/cron/ozon-funnel", "schedule": "0 21 * * *" },
     { "path": "/api/cron/ozon-seasonality", "schedule": "0 21 * * *" },
     { "path": "/api/cron/ozon-stock-import", "schedule": "0 21 * * *" },
+    { "path": "/api/cron/ozon-card-health", "schedule": "0 21 * * *" },
     { "path": "/api/cron/yandex", "schedule": "0 21 * * *" }
   ]
 }

@@ -457,3 +457,91 @@ export async function fetchOzonProductAttributes(marketplaceId: string): Promise
 
   return rows;
 }
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+export type OzonCardRating = {
+  sku: number;
+  rating: number;
+  // Невыполненные условия рейтинга (что поднять) — только не выполненные,
+  // чтобы сразу видеть "чего не хватает", не разбирая все условия подряд.
+  unfulfilledConditions: { description: string; cost: number }[];
+};
+
+type RatingBySkuResponse = {
+  products: {
+    sku: number;
+    rating: number;
+    groups: { conditions: { description: string; fulfilled: boolean; cost: number }[] }[];
+  }[];
+};
+
+// Контент-рейтинг (заполненность карточки: фото/текст/атрибуты, 0-100) —
+// доступен без ограничений подписки (в отличие от отзывов, см.
+// lib/ozonCardHealthSync.ts). Лимит площадки — 100 sku за запрос (проверено
+// эмпирически: 151 сразу дал "too many skus: count=151, limit=100").
+export async function fetchOzonCardRatings(marketplaceId: string, skus: number[]): Promise<OzonCardRating[]> {
+  const results: OzonCardRating[] = [];
+  for (const batch of chunk(skus, 100)) {
+    const data = await ozonPost<RatingBySkuResponse>(marketplaceId, "/v1/product/rating-by-sku", {
+      skus: batch.map(String),
+    });
+    for (const p of data.products) {
+      const unfulfilledConditions: { description: string; cost: number }[] = [];
+      for (const g of p.groups ?? []) {
+        for (const c of g.conditions ?? []) {
+          if (!c.fulfilled) unfulfilledConditions.push({ description: c.description, cost: c.cost });
+        }
+      }
+      results.push({ sku: p.sku, rating: p.rating, unfulfilledConditions });
+    }
+  }
+  return results;
+}
+
+export type OzonPriceIndex = {
+  sku: number;
+  // Цвет индикатора цены Ozon как есть: SUPER/GREEN/YELLOW/RED — от лучшей
+  // к худшей цене относительно рынка, WITHOUT_INDEX — площадка не считала.
+  colorIndex: string;
+  priceIndexValue: number | null; // наша цена / минимальная цена на рынке
+  competitorMinPriceRub: number | null; // минимальная цена на этот товар вне Ozon
+};
+
+type ProductInfoListResponse = {
+  items: {
+    sku: number;
+    price_indexes?: {
+      color_index?: string;
+      external_index_data?: { minimal_price?: string; price_index_value?: number };
+    };
+  }[];
+};
+
+// Индекс цены относительно рынка — реальные данные о конкурентах прямо из
+// Seller API, без парсинга чужих карточек. 151 sku влезли в один запрос при
+// проверке, но батчим на случай магазинов с более широким каталогом.
+export async function fetchOzonPriceIndexes(marketplaceId: string, skus: number[]): Promise<OzonPriceIndex[]> {
+  const results: OzonPriceIndex[] = [];
+  for (const batch of chunk(skus, 500)) {
+    const data = await ozonPost<ProductInfoListResponse>(marketplaceId, "/v3/product/info/list", { sku: batch });
+    for (const item of data.items) {
+      const pi = item.price_indexes;
+      const minimalPrice = pi?.external_index_data?.minimal_price;
+      // price_index_value приходит 0 и когда индекса реально нет (minimal_price
+      // пустой) — без цены конкурента 0 не значащее число, а "нет данных".
+      const hasExternalIndex = !!minimalPrice;
+      results.push({
+        sku: item.sku,
+        colorIndex: pi?.color_index || "COLOR_INDEX_WITHOUT_INDEX",
+        priceIndexValue: hasExternalIndex ? pi?.external_index_data?.price_index_value ?? null : null,
+        competitorMinPriceRub: hasExternalIndex ? Number(minimalPrice) : null,
+      });
+    }
+  }
+  return results;
+}

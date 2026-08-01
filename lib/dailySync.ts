@@ -5,6 +5,7 @@ import { syncWbStockImport, syncOzonStockImport, syncYandexStockImport } from ".
 import { syncWbReturns } from "./returnsSync";
 import { syncWbDailyFunnel, syncOzonDailyFunnel, syncYandexFunnelBackfill } from "./marketplaceFunnelSync";
 import { syncSeasonalityFromWb, syncSeasonalityFromOzon, syncSeasonalityFromYandexMarket } from "./seasonalitySync";
+import { syncOzonCardHealth } from "./ozonCardHealthSync";
 
 export type SubSyncResult = { ok: true; data: unknown } | { ok: false; error: string };
 export type MarketplaceSyncResult = { name: string; results: Record<string, SubSyncResult> };
@@ -88,6 +89,9 @@ export function runOzonSeasonalitySync() {
 }
 export function runOzonStockImportSync() {
   return runOzonSubSync("stockImport", syncOzonStockImport);
+}
+export function runOzonCardHealthSync() {
+  return runOzonSubSync("cardHealth", syncOzonCardHealth);
 }
 
 export async function runFullYandexSync(): Promise<FullMarketplaceSyncResult> {

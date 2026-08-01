@@ -50,6 +50,7 @@ async function AnalyticsPageContent() {
     allProducts,
     openClaimsByProductRaw,
     monthlyTrendRows,
+    cardHealthRows,
   ] = await Promise.all([
     prisma.productStockAnalytics.findMany({
       // Товары, снятые с продажи целиком (isActive: false), не заказываем и
@@ -117,6 +118,12 @@ async function AnalyticsPageContent() {
     prisma.productMonthlySales.findMany({
       where: { product: { isActive: true } },
       select: { productId: true, marketplaceId: true, year: true, month: true, qtySold: true },
+    }),
+    // "Здоровье карточки" — только Ozon (см. lib/ozonCardHealthSync.ts):
+    // контент-рейтинг и индекс цены относительно рынка.
+    prisma.productCardHealth.findMany({
+      where: { product: { isActive: true } },
+      select: { productId: true, marketplaceId: true, contentRating: true, priceIndexColor: true, competitorMinPriceRub: true },
     }),
   ]);
   const productById = new Map(allProducts.map((p) => [p.id, p]));
@@ -201,6 +208,28 @@ async function AnalyticsPageContent() {
       // сопоставимого сигнала (площадка не отдаёт отдельно неоплаченные
       // заказы) — null, а не 0.
       buybackPct: ue.buybackPct !== null ? Number(ue.buybackPct) : null,
+    };
+  }
+
+  // Цвет индекса цены Ozon как человекочитаемая подпись — от лучшей к
+  // худшей цене относительно рынка (см. lib/ozonCardHealthSync.ts).
+  const PRICE_INDEX_LABELS: Record<string, string> = {
+    COLOR_INDEX_SUPER: "Отличная",
+    COLOR_INDEX_GREEN: "Хорошая",
+    COLOR_INDEX_YELLOW: "Выше рынка",
+    COLOR_INDEX_RED: "Сильно выше рынка",
+  };
+  const cardHealthByProductMarketplace = new Map<string, (typeof cardHealthRows)[number]>();
+  for (const ch of cardHealthRows) {
+    cardHealthByProductMarketplace.set(`${ch.productId}|${ch.marketplaceId}`, ch);
+  }
+  function cardHealthFields(productId: string, marketplaceId: string) {
+    const ch = cardHealthByProductMarketplace.get(`${productId}|${marketplaceId}`);
+    if (!ch) return { contentRating: null, priceIndexLabel: null, competitorMinPriceRub: null };
+    return {
+      contentRating: ch.contentRating,
+      priceIndexLabel: ch.priceIndexColor ? PRICE_INDEX_LABELS[ch.priceIndexColor] ?? null : null,
+      competitorMinPriceRub: ch.competitorMinPriceRub !== null ? Number(ch.competitorMinPriceRub) : null,
     };
   }
 
@@ -397,6 +426,7 @@ async function AnalyticsPageContent() {
         ? Number(productById.get(r.productId)!.purchasePriceRub)
         : null,
       ...marginFields(r.productId, r.marketplace.id),
+      ...cardHealthFields(r.productId, r.marketplace.id),
     };
   });
 
@@ -448,6 +478,7 @@ async function AnalyticsPageContent() {
       // MpListing (см. sync-yandex) — маржа может быть посчитана, даже если
       // строки остатков для этой площадки ещё нет.
       ...marginFields(l.productId, marketplaceId),
+      ...cardHealthFields(l.productId, marketplaceId),
     });
   }
 
@@ -492,6 +523,9 @@ async function AnalyticsPageContent() {
     { key: "recommendedOrderQty", label: "Заказать, шт", type: "number", description: `Сколько штук заказать, чтобы хватило на ${TARGET_COVERAGE_DAYS} дней вперёд с учётом остатка, того, что уже едет, и сезонности`, width: 56 },
     { key: "cogsRub", label: "Себест., ₽", type: "number", description: "Закупочная себестоимость 1 шт (из карточки товара)", width: 54 },
     { key: "avgPriceRub", label: "Цена, ₽", type: "number", description: "Средняя цена продажи за то же окно, что и скорость продаж. «Нет данных» — товар выставлен на площадке, но остатки/продажи ещё ни разу не синхронизировались", width: 52 },
+    { key: "priceIndexLabel", label: "Цена vs рынок", type: "string", description: "Только Ozon: как наша цена выглядит на фоне рынка (данные из Seller API, не парсинг) — «Отличная»/«Хорошая»/«Выше рынка»/«Сильно выше рынка». Пусто — площадка ещё не посчитала индекс для этого товара", width: 64 },
+    { key: "competitorMinPriceRub", label: "Мин. цена рынка, ₽", type: "number", description: "Только Ozon: минимальная цена на этот же товар вне Ozon, по данным площадки", width: 58 },
+    { key: "contentRating", label: "Рейтинг карточки", type: "number", description: "Только Ozon: заполненность карточки (фото/описание/атрибуты), 0-100 — влияет на позицию в поиске", width: 58 },
     { key: "orderedQty", label: "Заказано, шт", type: "number", description: "Продано + возвращено за период последнего расчёта юнит-экономики (см. вкладку «Возвраты») — сколько всего штук оформили покупатели", width: 54 },
     { key: "returnsQty", label: "Возвращено, шт", type: "number", description: "Возвращено за тот же период — из последнего расчёта юнит-экономики (реальные данные из финотчёта площадки)", width: 54 },
     { key: "buybackPct", label: "% выкупа", type: "number", description: "Доля заказов, которые покупатель реально забрал и оплатил (не отменил/не отказался на ПВЗ) — реальный сигнал с площадки, не оценка. Пусто — площадка не отдаёт такие данные (сейчас только WB и Яндекс.Маркет)", width: 48 },
