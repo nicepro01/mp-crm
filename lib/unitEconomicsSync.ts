@@ -2,7 +2,7 @@ import type { Marketplace } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getCurrentCompanyId } from "./tenantContext";
 import { fetchWbNmIdToVendorCode, fetchWbFinanceReport, fetchWbOrders, fetchWbAdSpendByNmId } from "./wbApi";
-import { fetchOzonStocks, fetchOzonFinanceTransactions } from "./ozonApi";
+import { fetchOzonStocks, fetchOzonFinanceTransactions, fetchOzonPostings } from "./ozonApi";
 import { fetchOzonPerformanceAdSpendBySku } from "./ozonPerformanceApi";
 import {
   fetchYandexGoodsRealizationBothCampaigns,
@@ -258,10 +258,22 @@ const OZON_CLICK_AD_OPERATION_NAMES = new Set(["Оплата за клик", "П
 const OZON_STORAGE_OPERATION_NAME = "Услуга размещения товаров на складе";
 const OZON_ACQUIRING_OPERATION_NAME = "Оплата эквайринга";
 
+// % выкупа по отправлениям (/v3/posting/{fbo,fbs}/list, status
+// delivered/cancelled по каждому SKU) — тот же принцип лага, что и у WB
+// (см. WB_BUYOUT_LAG_DAYS выше): отправление младше лага может ещё не
+// доехать/не отмениться, и попадёт в "выкуплено" ошибочно, если считать его
+// сейчас. В отличие от /v3/finance/transaction/list (там возврат/отмена/
+// невыкуп — одна категория без разделения, см. OZON_CLICK_AD_OPERATION_NAMES
+// выше), тут статус отправления — реальный, не смешанный сигнал.
+const OZON_ORDERS_WINDOW_DAYS = 30;
+const OZON_BUYOUT_LAG_DAYS = 10;
+
 export async function syncOzonUnitEconomics(marketplace: Marketplace) {
   const dateTo = new Date();
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - OZON_REPORT_WINDOW_DAYS);
+  const ordersDateFrom = new Date();
+  ordersDateFrom.setDate(ordersDateFrom.getDate() - OZON_ORDERS_WINDOW_DAYS);
 
   // Остатки тут нужны только ради sku -> артикул продавца (offer_id) —
   // в самих транзакциях artikula нет, только числовой sku Ozon.
@@ -270,6 +282,25 @@ export async function syncOzonUnitEconomics(marketplace: Marketplace) {
   // null, если для магазина не настроены Performance API credentials —
   // тогда оставляем старое поведение (клики уходят в unattributed котёл).
   const perfAdsBySku = await fetchOzonPerformanceAdSpendBySku(marketplace.id, dateFrom, dateTo).catch(() => null);
+  const [fboPostings, fbsPostings] = await Promise.all([
+    fetchOzonPostings(marketplace.id, ordersDateFrom.toISOString(), dateTo.toISOString(), "fbo"),
+    fetchOzonPostings(marketplace.id, ordersDateFrom.toISOString(), dateTo.toISOString(), "fbs"),
+  ]);
+
+  const buyoutLagCutoff = new Date();
+  buyoutLagCutoff.setDate(buyoutLagCutoff.getDate() - OZON_BUYOUT_LAG_DAYS);
+  const buyoutBySku = new Map<number, { total: number; cancelled: number }>();
+  for (const posting of [...fboPostings, ...fbsPostings]) {
+    if (posting.status !== "delivered" && posting.status !== "cancelled") continue;
+    const createdAt = new Date(posting.createdAt);
+    if (createdAt > buyoutLagCutoff) continue; // исход ещё может не проявиться
+    for (const sku of posting.skus) {
+      const stat = buyoutBySku.get(sku) ?? { total: 0, cancelled: 0 };
+      stat.total++;
+      if (posting.status === "cancelled") stat.cancelled++;
+      buyoutBySku.set(sku, stat);
+    }
+  }
 
   const vendorCodeBySku = new Map<number, string>();
   for (const s of stocks) {
@@ -427,6 +458,9 @@ export async function syncOzonUnitEconomics(marketplace: Marketplace) {
     const netMarginRub = payoutRub + allocatedOverheadRub - cogsRub;
     const netMarginPct = sellPriceRub > 0 ? (netMarginRub / sellPriceRub) * 100 : 0;
     const mpCommissionPct = agg.revenueRub > 0 ? (agg.commissionRub / agg.revenueRub) * 100 : null;
+    const buyoutStat = buyoutBySku.get(sku);
+    const buybackPct =
+      buyoutStat && buyoutStat.total > 0 ? ((buyoutStat.total - buyoutStat.cancelled) / buyoutStat.total) * 100 : null;
 
     await prisma.unitEconomics.upsert({
       where: { productId_marketplaceId_periodMonth: { productId: product.id, marketplaceId: marketplace.id, periodMonth } },
@@ -448,12 +482,22 @@ export async function syncOzonUnitEconomics(marketplace: Marketplace) {
         adsRub,
         allocatedOverheadRub,
         taxRub: 0,
+        buybackPct,
         returnsQty: agg.quantityReturned,
         payoutRub,
         sellPriceRub,
         netMarginRub,
         netMarginPct,
-        details: { quantitySold: agg.quantitySold, windowDays: OZON_REPORT_WINDOW_DAYS, source: "v3/finance/transaction/list", adsSource: perfAdsBySku ? "performance_api" : "unattributed_allocation" },
+        details: {
+          quantitySold: agg.quantitySold,
+          windowDays: OZON_REPORT_WINDOW_DAYS,
+          source: "v3/finance/transaction/list",
+          adsSource: perfAdsBySku ? "performance_api" : "unattributed_allocation",
+          buyoutOrdersTotal: buyoutStat?.total ?? 0,
+          buyoutOrdersCancelled: buyoutStat?.cancelled ?? 0,
+          buyoutWindowDays: OZON_ORDERS_WINDOW_DAYS,
+          buyoutLagDays: OZON_BUYOUT_LAG_DAYS,
+        },
       },
       update: {
         cogsRub,
@@ -466,12 +510,22 @@ export async function syncOzonUnitEconomics(marketplace: Marketplace) {
         acquiringRub,
         adsRub,
         allocatedOverheadRub,
+        buybackPct,
         returnsQty: agg.quantityReturned,
         payoutRub,
         sellPriceRub,
         netMarginRub,
         netMarginPct,
-        details: { quantitySold: agg.quantitySold, windowDays: OZON_REPORT_WINDOW_DAYS, source: "v3/finance/transaction/list", adsSource: perfAdsBySku ? "performance_api" : "unattributed_allocation" },
+        details: {
+          quantitySold: agg.quantitySold,
+          windowDays: OZON_REPORT_WINDOW_DAYS,
+          source: "v3/finance/transaction/list",
+          adsSource: perfAdsBySku ? "performance_api" : "unattributed_allocation",
+          buyoutOrdersTotal: buyoutStat?.total ?? 0,
+          buyoutOrdersCancelled: buyoutStat?.cancelled ?? 0,
+          buyoutWindowDays: OZON_ORDERS_WINDOW_DAYS,
+          buyoutLagDays: OZON_BUYOUT_LAG_DAYS,
+        },
         calculatedAt: new Date(),
       },
     });

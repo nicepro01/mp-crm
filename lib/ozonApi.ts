@@ -283,6 +283,13 @@ export type OzonPostingRow = {
   // на реальном ответе (financial_data отключён — цена в products[] должна
   // быть доступна и без него, но это предположение по документации, не факт).
   priceRub: number;
+  // sku повторяется в массиве столько раз, сколько единиц товара в позиции —
+  // тот же формат, что и OzonTransactionRow.skus. Нужен для % выкупа по
+  // товару: status ("delivered"/"cancelled") — единственный реальный,
+  // не размазанный по товарам сигнал невыкупа/отмены у Ozon (в отличие от
+  // /v3/finance/transaction/list, где возврат/отмена/невыкуп — одна
+  // категория без разделения, см. lib/unitEconomicsSync.ts).
+  skus: number[];
 };
 
 /**
@@ -322,8 +329,8 @@ export async function fetchOzonPostings(
           in_process_at?: string;
           created_at?: string;
           status: string;
-          products?: { price?: string | number; quantity?: number }[];
-          financial_data?: { products?: { price?: string | number; quantity?: number }[] };
+          products?: { price?: string | number; quantity?: number; sku?: number }[];
+          financial_data?: { products?: { price?: string | number; quantity?: number; sku?: number }[] };
         }[]
       | undefined = Array.isArray(raw?.postings)
       ? raw.postings
@@ -349,7 +356,18 @@ export async function fetchOzonPostings(
         const qty = Number(prod?.quantity) || 1;
         return sum + (Number.isFinite(price) ? price * qty : 0);
       }, 0);
-      rows.push({ createdAt: p.in_process_at ?? p.created_at ?? "", status: p.status, priceRub });
+      // sku — только из products[] верхнего уровня: financial_data.products[]
+      // не содержит sku вообще (только product_id, проверено эмпирически на
+      // реальном ответе), а price там нужен именно из financial_data (иначе
+      // NaN, см. комментарий выше) — поэтому два разных источника для двух
+      // разных полей одной и той же позиции.
+      const skus: number[] = [];
+      for (const prod of p.products ?? []) {
+        if (!prod?.sku) continue;
+        const qty = Number(prod.quantity) || 1;
+        for (let i = 0; i < qty; i++) skus.push(prod.sku);
+      }
+      rows.push({ createdAt: p.in_process_at ?? p.created_at ?? "", status: p.status, priceRub, skus });
     }
 
     const hasNext: boolean = raw?.has_next ?? raw?.result?.has_next ?? false;
