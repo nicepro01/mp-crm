@@ -316,6 +316,14 @@ export async function syncOzonUnitEconomics(marketplace: Marketplace) {
   let unattributedOperations = 0;
   const unattributedByCategory = new Map<string, { amount: number; count: number }>();
 
+  // Один физический возврат/отмена/невыкуп Ozon разбивает на несколько
+  // транзакций type="returns" с одним и тем же posting_number (доставка,
+  // обработка, получение — отдельные строки услуг за ОДНУ и ту же единицу
+  // товара, проверено эмпирически). Сумму (reverseLogisticsRub) считаем по
+  // всем таким строкам — это реальные расходы, а вот количество штук — по
+  // уникальной паре (posting_number, sku), иначе оно раздувается в 2-4 раза.
+  const seenReturnPostingSku = new Set<string>();
+
   for (const t of transactions) {
     if (t.skus.length === 0) {
       // Реальный расход на эти клики уже есть по SKU из Performance API —
@@ -344,7 +352,11 @@ export async function syncOzonUnitEconomics(marketplace: Marketplace) {
         agg.commissionRub += Math.abs(perUnitCommission);
         agg.logisticsRub += Math.abs(perUnitAmount - perUnitAccruals - perUnitCommission);
       } else if (t.type === "returns") {
-        agg.quantityReturned += 1;
+        const returnKey = `${t.postingNumber}|${sku}`;
+        if (!seenReturnPostingSku.has(returnKey)) {
+          seenReturnPostingSku.add(returnKey);
+          agg.quantityReturned += 1;
+        }
         agg.reverseLogisticsRub += Math.abs(perUnitAmount);
       } else if (t.operationType === OZON_STORAGE_OPERATION_NAME) {
         agg.storageRub += Math.abs(perUnitAmount);

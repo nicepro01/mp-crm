@@ -202,6 +202,14 @@ export type OzonTransactionRow = {
   skus: number[]; // sku повторяется в массиве столько раз, сколько единиц товара в операции
   warehouseId: number; // posting.warehouse_id — со склада какого физического склада ушёл заказ;
   // сопоставляется с fetchOzonClusters() для разбивки продаж по кластеру
+  // Один физический возврат/отмена/невыкуп разбивается Ozon на 2-4 отдельные
+  // транзакции type="returns" (доставка, обработка, получение — разные
+  // строки услуг для ОДНОЙ и той же единицы товара, проверено эмпирически:
+  // 95% посылок с возвратом дают больше одной транзакции с одним и тем же
+  // posting_number). Без дедупликации по posting_number количество возвратов
+  // считалось в 2-4 раза больше реального — см. использование в
+  // lib/unitEconomicsSync.ts.
+  postingNumber: string;
 };
 
 type TransactionListResponse = {
@@ -213,7 +221,7 @@ type TransactionListResponse = {
       sale_commission: number;
       amount: number;
       items: { sku: number }[];
-      posting: { warehouse_id: number };
+      posting: { warehouse_id: number; posting_number: string };
     }[];
     page_count: number;
   };
@@ -249,6 +257,7 @@ export async function fetchOzonFinanceTransactions(
         amount: op.amount,
         skus: op.items.map((i) => i.sku),
         warehouseId: op.posting?.warehouse_id ?? 0,
+        postingNumber: op.posting?.posting_number ?? "",
       });
     }
 
