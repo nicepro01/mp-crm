@@ -77,6 +77,11 @@ export default function PlannerForm({
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Скрывает строки, где по текущей вкладке (общей или конкретной площадки)
+  // ничего заказывать не нужно — чтобы после того как отметили нужное на
+  // всех площадках, на "Общей" сразу было видно только то, что реально пора
+  // заказывать, без разглядывания всего каталога.
+  const [onlyNeedsReorder, setOnlyNeedsReorder] = useState(false);
   const { pinned, sortKey, sortDir, handleSort, togglePin } = useMultiSort<SortKey>("daysOfStockLeft");
   // Разворот строки с разбивкой по складам — ключ включает код площадки,
   // т.к. одна и та же строка товара показывается на нескольких вкладках
@@ -150,7 +155,10 @@ export default function PlannerForm({
     statsOverride?: Record<string, MarketplaceStat>,
     marketplaceId?: string
   ) {
-    const sorted = sortRows(tabRows, sortKey, sortDir, statsOverride, pinned);
+    const filteredRows = onlyNeedsReorder
+      ? tabRows.filter((r) => displayStats(r, statsOverride).needsReorder)
+      : tabRows;
+    const sorted = sortRows(filteredRows, sortKey, sortDir, statsOverride, pinned);
     const subtotal = groupSubtotal(sorted, statsOverride);
     const detailColSpan = columns.length + 7;
     return (
@@ -204,17 +212,35 @@ export default function PlannerForm({
                 const warehouseStats = marketplaceId
                   ? warehouseStatsByProduct[marketplaceId]?.[r.productId]
                   : undefined;
+                // На "Общей" вкладке (marketplaceId не задан) для товара,
+                // который продаётся на нескольких площадках сразу — сколько
+                // из общего рекомендованного количества приходится на
+                // каждую конкретную площадку (тот же marketplaceStats, что
+                // и на вкладке площадки, просто собранный по всем сразу).
+                const marketplaceBreakdown =
+                  !marketplaceId && r.marketplaceIds.length > 1
+                    ? r.marketplaceIds.map((mpId) => {
+                        const stat = marketplaceStats[mpId]?.[r.productId];
+                        return {
+                          marketplaceId: mpId,
+                          name: marketplaceNames[mpId] ?? mpId,
+                          qtyAvailable: stat?.qtyAvailable ?? 0,
+                          avgDailySalesQty: stat?.avgDailySalesQty ?? 0,
+                          recommendedOrderQty: stat?.recommendedOrderQty ?? 0,
+                        };
+                      })
+                    : null;
                 const expandKey = `${marketplaceId ?? "all"}|${r.productId}`;
                 const isExpanded = expandedWarehouses.has(expandKey);
                 return (
                   <Fragment key={r.productId}>
                   <tr style={{ background: rowBg }}>
                     <td>
-                      {warehouseStats && warehouseStats.length > 0 && (
+                      {((warehouseStats && warehouseStats.length > 0) || marketplaceBreakdown) && (
                         <button
                           type="button"
                           onClick={() => toggleWarehouseExpanded(expandKey)}
-                          aria-label="Показать разбивку по складам"
+                          aria-label={marketplaceBreakdown ? "Показать разбивку по площадкам" : "Показать разбивку по складам"}
                           style={{
                             background: "none",
                             border: "none",
@@ -346,6 +372,35 @@ export default function PlannerForm({
                                 <td>{w.qtyAvailable}</td>
                                 <td>{w.avgDailySalesQty || "—"}</td>
                                 <td>{w.recommendedOrderQty || "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  )}
+                  {isExpanded && marketplaceBreakdown && (
+                    <tr>
+                      <td colSpan={detailColSpan} style={{ background: "var(--surface-alt)", padding: 12 }}>
+                        <div className="muted" style={{ marginBottom: 6 }}>
+                          Разбивка по площадкам — сколько из общего количества фактически нужно на каждой конкретной площадке
+                        </div>
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Площадка</th>
+                              <th>Остаток</th>
+                              <th>Продаж/день</th>
+                              <th>Рекомендовано, шт</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {marketplaceBreakdown.map((m) => (
+                              <tr key={m.marketplaceId}>
+                                <td>{m.name}</td>
+                                <td>{m.qtyAvailable}</td>
+                                <td>{m.avgDailySalesQty || "—"}</td>
+                                <td>{m.recommendedOrderQty || "—"}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -497,6 +552,15 @@ export default function PlannerForm({
           <input type="date" value={orderDate} onChange={(e) => setOrderDate(e.target.value)} />
         </label>
       </div>
+
+      <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 12 }}>
+        <input
+          type="checkbox"
+          checked={onlyNeedsReorder}
+          onChange={(e) => setOnlyNeedsReorder(e.target.checked)}
+        />
+        Показывать только то, что нужно заказать
+      </label>
 
       <AnalyticsTabs tabs={tabs} />
 
