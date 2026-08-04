@@ -452,12 +452,28 @@ model MpListing {
   currentPrice Decimal? @db.Decimal(10, 2)
   isActive     Boolean  @default(true)
 
+  // Схема продажи на площадке (сейчас реально только у Ozon) — как есть из
+  // прайс-листа поставщика ("FBS" / "FBO,FBS"), не enum: у поставщиков
+  // встречаются разные написания, а само значение — план продавца, не факт
+  // от площадки, который можно было бы валидировать через API.
+  fulfillmentSchema String?
+  // Статус товара из прайс-листа поставщика — см. lib/ozonApi.ts не
+  // относится, это ручная разметка в файле поставщика (цвет ячейки:
+  // зелёный/жёлтый/красный), а не что-то, что отдаёт сама площадка.
+  lifecycleStatus ListingLifecycleStatus?
+
   // marketplaceId уже однозначно определяет компанию (у каждой компании
   // своя строка Marketplace) — составной ключ остаётся корректным без
   // явного companyId внутри него.
   @@unique([marketplaceId, mpSku])
   @@index([companyId])
   @@map("mp_listings")
+}
+
+enum ListingLifecycleStatus {
+  SELLING // Продажа
+  NEW_TESTING // Новинка, тест
+  PHASING_OUT // Вывод
 }
 
 enum MatchStatus {
