@@ -76,6 +76,7 @@ export default function PlannerForm({
   const [orderDate, setOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportingWarehouse, setExportingWarehouse] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Скрывает строки, где по текущей вкладке (общей или конкретной площадки)
   // ничего заказывать не нужно — чтобы после того как отметили нужное на
@@ -212,13 +213,16 @@ export default function PlannerForm({
                 const warehouseStats = marketplaceId
                   ? warehouseStatsByProduct[marketplaceId]?.[r.productId]
                   : undefined;
-                // На "Общей" вкладке (marketplaceId не задан) для товара,
-                // который продаётся на нескольких площадках сразу — сколько
-                // из общего рекомендованного количества приходится на
-                // каждую конкретную площадку (тот же marketplaceStats, что
-                // и на вкладке площадки, просто собранный по всем сразу).
+                // На "Общей"/поставщицких вкладках (marketplaceId не задан) —
+                // сколько из общего рекомендованного количества приходится на
+                // каждую площадку (тот же marketplaceStats, что и на вкладке
+                // площадки, просто собранный по всем сразу), и сразу же под
+                // каждой площадкой — по каким городам/кластерам внутри неё
+                // (та же warehouseStatsByProduct, что и на вкладке площадки).
+                // Так закупщик видит полное дерево площадка → город одним
+                // раскрытием, не переключаясь по вкладкам.
                 const marketplaceBreakdown =
-                  !marketplaceId && r.marketplaceIds.length > 1
+                  !marketplaceId && r.marketplaceIds.length > 0
                     ? r.marketplaceIds.map((mpId) => {
                         const stat = marketplaceStats[mpId]?.[r.productId];
                         return {
@@ -228,6 +232,7 @@ export default function PlannerForm({
                           avgDailySalesQty: stat?.avgDailySalesQty ?? 0,
                           avgDailySalesQty7d: stat?.avgDailySalesQty7d ?? 0,
                           recommendedOrderQty: stat?.recommendedOrderQty ?? 0,
+                          cities: warehouseStatsByProduct[mpId]?.[r.productId] ?? [],
                         };
                       })
                     : null;
@@ -385,12 +390,14 @@ export default function PlannerForm({
                     <tr>
                       <td colSpan={detailColSpan} style={{ background: "var(--surface-alt)", padding: 12 }}>
                         <div className="muted" style={{ marginBottom: 6 }}>
-                          Разбивка по площадкам — сколько из общего количества фактически нужно на каждой конкретной площадке
+                          Разбивка по площадкам и городам/кластерам — сколько из общего количества фактически нужно
+                          на каждой площадке и куда внутри неё физически развезти
                         </div>
                         <table>
                           <thead>
                             <tr>
                               <th>Площадка</th>
+                              <th>Город/склад</th>
                               <th>Остаток</th>
                               <th>Продаж/день (28д)</th>
                               <th>Продаж/день (7д)</th>
@@ -399,13 +406,26 @@ export default function PlannerForm({
                           </thead>
                           <tbody>
                             {marketplaceBreakdown.map((m) => (
-                              <tr key={m.marketplaceId}>
-                                <td>{m.name}</td>
-                                <td>{m.qtyAvailable}</td>
-                                <td>{m.avgDailySalesQty || "—"}</td>
-                                <td>{m.avgDailySalesQty7d || "—"}</td>
-                                <td>{m.recommendedOrderQty || "—"}</td>
-                              </tr>
+                              <Fragment key={m.marketplaceId}>
+                                <tr style={{ fontWeight: 600 }}>
+                                  <td>{m.name}</td>
+                                  <td className="muted">{m.cities.length > 0 ? "Итого по площадке" : "—"}</td>
+                                  <td>{m.qtyAvailable}</td>
+                                  <td>{m.avgDailySalesQty || "—"}</td>
+                                  <td>{m.avgDailySalesQty7d || "—"}</td>
+                                  <td>{m.recommendedOrderQty || "—"}</td>
+                                </tr>
+                                {m.cities.map((c) => (
+                                  <tr key={c.warehouseName}>
+                                    <td></td>
+                                    <td>{c.warehouseName}</td>
+                                    <td>{c.qtyAvailable}</td>
+                                    <td>{c.avgDailySalesQty || "—"}</td>
+                                    <td></td>
+                                    <td>{c.recommendedOrderQty || "—"}</td>
+                                  </tr>
+                                ))}
+                              </Fragment>
                             ))}
                           </tbody>
                         </table>
@@ -499,6 +519,42 @@ export default function PlannerForm({
     const a = document.createElement("a");
     a.href = url;
     a.download = `zakupka-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Раскладка по площадкам/городам для кладовщика — та же, что появляется на
+  // странице уже оформленной поставки (см. WarehouseExportButton), но здесь
+  // можно скачать сразу по выбранным строкам планировщика, ещё до оформления.
+  async function handleWarehouseExport() {
+    setError(null);
+    const items = rows
+      .filter((r) => lines[r.productId]?.selected && Number(lines[r.productId].qty) > 0)
+      .map((r) => ({ productId: r.productId, qty: Number(lines[r.productId].qty) }));
+    if (items.length === 0) {
+      setError("Выберите хотя бы один товар с заполненным количеством для раскладки по складам");
+      return;
+    }
+
+    setExportingWarehouse(true);
+    const res = await fetch("/api/batches/plan/warehouse-export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    setExportingWarehouse(false);
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setError(body.error ?? "Не удалось выгрузить Excel");
+      return;
+    }
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `sklad-plan-${new Date().toISOString().slice(0, 10)}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -605,6 +661,9 @@ export default function PlannerForm({
         </button>
         <button type="button" className="btn btn-secondary" onClick={handleExport} disabled={exporting}>
           {exporting ? "Выгружаю…" : "Скачать Excel для закупщика"}
+        </button>
+        <button type="button" className="btn btn-secondary" onClick={handleWarehouseExport} disabled={exportingWarehouse}>
+          {exportingWarehouse ? "Выгружаю…" : "Скачать раскладку по городам (для склада)"}
         </button>
       </div>
     </form>
