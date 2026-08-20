@@ -29,6 +29,7 @@ async function SuppliersPageContent() {
           <thead>
             <tr>
               <th>Название</th>
+              <th>Страна</th>
               <th>Контакты</th>
               <th>MOQ</th>
               <th>Срок, дн.</th>
@@ -40,6 +41,7 @@ async function SuppliersPageContent() {
             {suppliers.map((s) => (
               <tr key={s.id}>
                 <td>{s.name}</td>
+                <td>{s.country === "RUSSIA" ? "Россия" : "Китай"}</td>
                 <td>{s.contactInfo ?? "—"}</td>
                 <td>{s.moq ?? "—"}</td>
                 <td>{s.leadTimeDays ?? "—"}</td>

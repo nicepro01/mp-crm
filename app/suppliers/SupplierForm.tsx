@@ -6,6 +6,7 @@ import { useState } from "react";
 type SupplierFormValues = {
   id?: string;
   name: string;
+  country: "CHINA" | "RUSSIA";
   contactInfo: string;
   paymentTerms: string;
   moq: string;
@@ -16,6 +17,7 @@ type SupplierFormValues = {
 
 const emptyValues: SupplierFormValues = {
   name: "",
+  country: "CHINA",
   contactInfo: "",
   paymentTerms: "",
   moq: "",
@@ -53,6 +55,7 @@ export default function SupplierForm({
 
     const payload = {
       name: values.name,
+      country: values.country,
       contactInfo: values.contactInfo || null,
       paymentTerms: values.paymentTerms || null,
       moq: values.moq,
@@ -93,6 +96,14 @@ export default function SupplierForm({
           value={values.name}
           onChange={(e) => set("name", e.target.value)}
         />
+      </label>
+
+      <label>
+        Страна
+        <select value={values.country} onChange={(e) => set("country", e.target.value as "CHINA" | "RUSSIA")}>
+          <option value="CHINA">Китай</option>
+          <option value="RUSSIA">Россия</option>
+        </select>
       </label>
 
       <label>

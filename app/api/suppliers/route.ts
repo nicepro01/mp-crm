@@ -30,6 +30,7 @@ async function POSTContent(req: NextRequest) {
       data: {
         companyId: getCurrentCompanyId(),
         name: data.name,
+        ...(data.country ? { country: data.country } : {}),
         contactInfo: data.contactInfo || null,
         paymentTerms: data.paymentTerms || null,
         moq: data.moq === "" || data.moq === null ? null : Number(data.moq),

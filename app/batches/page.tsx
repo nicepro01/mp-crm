@@ -37,7 +37,8 @@ async function BatchesPageContent() {
         <h1>Поставки из Китая</h1>
         <div style={{ display: "flex", gap: 8 }}>
           <InTransitExportButton />
-          <a className="btn btn-secondary" href="/batches/plan">Планировщик поставок</a>
+          <a className="btn btn-secondary" href="/batches/plan">Планировщик (Китай)</a>
+          <a className="btn btn-secondary" href="/batches/plan-ru">Планировщик (Россия)</a>
           <a className="btn" href="/batches/new">+ Новая поставка</a>
         </div>
       </div>

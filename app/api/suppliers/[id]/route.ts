@@ -43,6 +43,7 @@ async function PUTContent(
       where: { id: params.id },
       data: {
         name: data.name,
+        ...(data.country ? { country: data.country } : {}),
         contactInfo: data.contactInfo || null,
         paymentTerms: data.paymentTerms || null,
         moq: data.moq === "" || data.moq === null ? null : Number(data.moq),

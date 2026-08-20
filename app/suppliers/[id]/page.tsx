@@ -265,6 +265,7 @@ async function EditSupplierPageContent(params: { id: string }) {
         initial={{
           id: supplier.id,
           name: supplier.name,
+          country: supplier.country,
           contactInfo: supplier.contactInfo ?? "",
           paymentTerms: supplier.paymentTerms ?? "",
           moq: supplier.moq === null ? "" : String(supplier.moq),

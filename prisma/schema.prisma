@@ -214,12 +214,24 @@ model ProductCostHistory {
 // ---------------------------------------------------------------------
 // 2. ПОСТАВЩИКИ + СРАВНЕНИЕ ЦЕН
 // ---------------------------------------------------------------------
+// Китай — долгий лид-тайм (обычно ~120 дней), поставки идут через
+// стандартный Планировщик (/batches/plan) с отслеживанием "в пути".
+// Россия — короткий лид-тайм (дни-недели), заказывается тем же способом
+// (поставка + логистический статус), но отдельно от китайского ассортимента
+// — см. /batches/plan-ru, чтобы не путать в одном списке товары с совсем
+// разными горизontами планирования.
+enum SupplierCountry {
+  CHINA
+  RUSSIA
+}
+
 model Supplier {
   id        String  @id @default(uuid())
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   name         String
+  country      SupplierCountry @default(CHINA)
   contactInfo  String?
   paymentTerms String? // условия оплаты (аванс %, постоплата и т.д.)
   moq          Int? // минимальный объём заказа
