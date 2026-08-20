@@ -274,6 +274,7 @@ export default function PlannerForm({
                       {r.sku}
                       <div className="muted">{r.name}</div>
                     </td>
+                    <td>{r.vendorCode ?? "—"}</td>
                     <td>{r.supplierName ?? "—"}</td>
                     <td>{stats.qtyAvailable}</td>
                     <td>{r.qtyInTransit || "—"}</td>

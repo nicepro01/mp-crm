@@ -110,6 +110,7 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
   type Agg = {
     productId: string;
     sku: string;
+    vendorCode: string | null;
     name: string;
     photoUrl: string | null;
     purchasePriceRub: number | null;
@@ -133,6 +134,7 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
       acc = {
         productId,
         sku: product.sku,
+        vendorCode: product.vendorCode,
         name: product.name,
         photoUrl: product.photoUrl,
         purchasePriceRub: product.purchasePriceRub ? Number(product.purchasePriceRub) : null,
@@ -182,6 +184,7 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
       return {
         productId: acc.productId,
         sku: acc.sku,
+        vendorCode: acc.vendorCode,
         name: acc.name,
         photoUrl: acc.photoUrl,
         purchasePriceRub: acc.purchasePriceRub,

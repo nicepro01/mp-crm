@@ -4,6 +4,12 @@ import { applyMultiSort, PinnedSort } from "@/lib/useMultiSort";
 export type PlannerRow = {
   productId: string;
   sku: string;
+  // Артикул поставщика (Product.vendorCode) — код, под которым товар
+  // числится у самого поставщика (Грал/Маяк/Сонатекс), не наш внутренний
+  // sku. Нужен отдельно: staff ссылается на него при оформлении реального
+  // заказа поставщику, а не на внутренний sku, который поставщику ничего
+  // не говорит.
+  vendorCode: string | null;
   name: string;
   photoUrl: string | null;
   purchasePriceRub: number | null;
@@ -67,6 +73,7 @@ export type MarketplaceStat = {
 
 export type SortKey =
   | "sku"
+  | "vendorCode"
   | "supplierName"
   | "qtyAvailable"
   | "qtyInTransit"
@@ -78,6 +85,7 @@ export type SortKey =
 
 export const columns: { key: SortKey; label: string; type: "string" | "number" }[] = [
   { key: "sku", label: "Товар", type: "string" },
+  { key: "vendorCode", label: "Артикул поставщика", type: "string" },
   { key: "supplierName", label: "Поставщик", type: "string" },
   { key: "qtyAvailable", label: "Остаток", type: "number" },
   { key: "qtyInTransit", label: "В пути", type: "number" },
@@ -118,6 +126,7 @@ function compareByKey(
   statsOverride?: Record<string, MarketplaceStat>
 ): number {
   if (key === "sku") return compareForSort(a.sku, b.sku, "string", dir);
+  if (key === "vendorCode") return compareForSort(a.vendorCode, b.vendorCode, "string", dir);
   if (key === "supplierName") return compareForSort(a.supplierName, b.supplierName, "string", dir);
   if (key === "qtyInTransit") return compareForSort(a.qtyInTransit, b.qtyInTransit, "number", dir);
   const col = columns.find((c) => c.key === key);
