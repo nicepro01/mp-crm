@@ -226,6 +226,7 @@ export default function PlannerForm({
                           name: marketplaceNames[mpId] ?? mpId,
                           qtyAvailable: stat?.qtyAvailable ?? 0,
                           avgDailySalesQty: stat?.avgDailySalesQty ?? 0,
+                          avgDailySalesQty7d: stat?.avgDailySalesQty7d ?? 0,
                           recommendedOrderQty: stat?.recommendedOrderQty ?? 0,
                         };
                       })
@@ -272,6 +273,7 @@ export default function PlannerForm({
                     <td>{stats.qtyAvailable}</td>
                     <td>{r.qtyInTransit || "—"}</td>
                     <td>{stats.avgDailySalesQty || "—"}</td>
+                    <td>{stats.avgDailySalesQty7d || "—"}</td>
                     <td>
                       {stats.daysOfStockLeft ?? "—"}
                       {critical && (
@@ -390,7 +392,8 @@ export default function PlannerForm({
                             <tr>
                               <th>Площадка</th>
                               <th>Остаток</th>
-                              <th>Продаж/день</th>
+                              <th>Продаж/день (28д)</th>
+                              <th>Продаж/день (7д)</th>
                               <th>Рекомендовано, шт</th>
                             </tr>
                           </thead>
@@ -400,6 +403,7 @@ export default function PlannerForm({
                                 <td>{m.name}</td>
                                 <td>{m.qtyAvailable}</td>
                                 <td>{m.avgDailySalesQty || "—"}</td>
+                                <td>{m.avgDailySalesQty7d || "—"}</td>
                                 <td>{m.recommendedOrderQty || "—"}</td>
                               </tr>
                             ))}

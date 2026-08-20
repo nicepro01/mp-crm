@@ -17,6 +17,9 @@ export type PlannerRow = {
   qtyAvailable: number;
   qtyInTransit: number;
   avgDailySalesQty: number;
+  // То же самое, но за последние 7 дней — для сравнения с 28-дневным
+  // средним (недавний всплеск/просадка спроса виден раньше).
+  avgDailySalesQty7d: number;
   daysOfStockLeft: number | null;
   // Сколько дней хватит остатка, если прямо сейчас придёт то, что уже "в
   // пути" (остаток + вся партия в пути, делить на продажи/день). На
@@ -53,6 +56,7 @@ export const LOW_BUYBACK_THRESHOLD_PCT = 80;
 export type MarketplaceStat = {
   qtyAvailable: number;
   avgDailySalesQty: number;
+  avgDailySalesQty7d: number;
   daysOfStockLeft: number | null;
   daysOfStockLeftAfterArrival: number | null;
   qtyInTransitAllocated: number;
@@ -67,6 +71,7 @@ export type SortKey =
   | "qtyAvailable"
   | "qtyInTransit"
   | "avgDailySalesQty"
+  | "avgDailySalesQty7d"
   | "daysOfStockLeft"
   | "daysOfStockLeftAfterArrival"
   | "recommendedOrderQty";
@@ -76,7 +81,8 @@ export const columns: { key: SortKey; label: string; type: "string" | "number" }
   { key: "supplierName", label: "Поставщик", type: "string" },
   { key: "qtyAvailable", label: "Остаток", type: "number" },
   { key: "qtyInTransit", label: "В пути", type: "number" },
-  { key: "avgDailySalesQty", label: "Продаж/день", type: "number" },
+  { key: "avgDailySalesQty", label: "Продаж/день (28д)", type: "number" },
+  { key: "avgDailySalesQty7d", label: "Продаж/день (7д)", type: "number" },
   { key: "daysOfStockLeft", label: "Дней до конца", type: "number" },
   { key: "daysOfStockLeftAfterArrival", label: "Дней хватит после прихода", type: "number" },
   { key: "recommendedOrderQty", label: "Рекомендовано, шт", type: "number" },
@@ -94,6 +100,7 @@ export function displayStats(r: PlannerRow, statsOverride?: Record<string, Marke
   return {
     qtyAvailable: r.qtyAvailable,
     avgDailySalesQty: r.avgDailySalesQty,
+    avgDailySalesQty7d: r.avgDailySalesQty7d,
     daysOfStockLeft: r.daysOfStockLeft,
     daysOfStockLeftAfterArrival: r.daysOfStockLeftAfterArrival,
     qtyInTransitAllocated: r.qtyInTransit,

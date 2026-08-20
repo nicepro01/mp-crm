@@ -19,10 +19,16 @@ import { upsertImportItem } from "./matching";
 // Среднесуточные продажи считаем за одно и то же окно во всей аналитике
 // остатков.
 const SALES_WINDOW_DAYS = 28;
+// Параллельно считаем то же самое за короткое окно — недавний всплеск/
+// просадку спроса видно раньше, чем это отразится на 28-дневном среднем
+// (см. ProductStockAnalytics.avgDailySalesQty7d, используется в Планировщике).
+const SALES_WINDOW_DAYS_7D = 7;
 
 export async function syncWbStockImport(marketplace: Marketplace) {
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - SALES_WINDOW_DAYS);
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - SALES_WINDOW_DAYS_7D);
   // Последовательно, не Promise.all — параллельные тяжёлые запросы к WB
   // (несколько категорий сразу) уже приводили к 429/обрыву соединения.
   const nmIdMap = await fetchWbNmIdToVendorCode(marketplace.id);
@@ -36,6 +42,7 @@ export async function syncWbStockImport(marketplace: Marketplace) {
     name: string | null;
     photoUrl: string | null;
     soldCount: number;
+    soldCount7d: number;
     priceSum: number;
     priceCount: number;
   };
@@ -44,7 +51,7 @@ export async function syncWbStockImport(marketplace: Marketplace) {
   function getAgg(article: string): Agg {
     let agg = byArticle.get(article);
     if (!agg) {
-      agg = { qtyAvailable: 0, barcode: null, name: null, photoUrl: null, soldCount: 0, priceSum: 0, priceCount: 0 };
+      agg = { qtyAvailable: 0, barcode: null, name: null, photoUrl: null, soldCount: 0, soldCount7d: 0, priceSum: 0, priceCount: 0 };
       byArticle.set(article, agg);
     }
     return agg;
@@ -64,6 +71,7 @@ export async function syncWbStockImport(marketplace: Marketplace) {
     if (!article || !sale.saleID.startsWith("S")) continue;
     const agg = getAgg(article);
     agg.soldCount += 1;
+    if (new Date(sale.date) >= sevenDaysAgo) agg.soldCount7d += 1;
     if (sale.finishedPrice > 0) {
       agg.priceSum += sale.finishedPrice;
       agg.priceCount += 1;
@@ -99,7 +107,7 @@ export async function syncWbStockImport(marketplace: Marketplace) {
   const pendingCodes: string[] = [];
   const matchedProductIdByArticle = new Map<string, string>();
 
-  type StockAgg = { qtyAvailable: number; soldCount: number; avgPriceRub: number | null; articles: string[] };
+  type StockAgg = { qtyAvailable: number; soldCount: number; soldCount7d: number; avgPriceRub: number | null; articles: string[] };
   const stockAggByProduct = new Map<string, StockAgg>();
 
   for (const [article, agg] of byArticle) {
@@ -129,11 +137,13 @@ export async function syncWbStockImport(marketplace: Marketplace) {
       const productAgg = stockAggByProduct.get(matchedProductId) ?? {
         qtyAvailable: 0,
         soldCount: 0,
+        soldCount7d: 0,
         avgPriceRub: null,
         articles: [],
       };
       productAgg.qtyAvailable += agg.qtyAvailable;
       productAgg.soldCount += agg.soldCount;
+      productAgg.soldCount7d += agg.soldCount7d;
       if (productAgg.avgPriceRub === null) productAgg.avgPriceRub = avgPriceRub;
       productAgg.articles.push(article);
       stockAggByProduct.set(matchedProductId, productAgg);
@@ -150,6 +160,7 @@ export async function syncWbStockImport(marketplace: Marketplace) {
   for (const [productId, agg] of stockAggByProduct) {
     const canonicalArticle = agg.articles[0];
     const avgDailySalesQty = agg.soldCount / SALES_WINDOW_DAYS;
+    const avgDailySalesQty7d = agg.soldCount7d / SALES_WINDOW_DAYS_7D;
     const daysOfStockLeft = avgDailySalesQty > 0 ? Math.round(agg.qtyAvailable / avgDailySalesQty) : null;
 
     await prisma.productStockAnalytics.upsert({
@@ -162,6 +173,7 @@ export async function syncWbStockImport(marketplace: Marketplace) {
         liquidityStatus: null,
         daysOfStockLeft,
         avgDailySalesQty,
+        avgDailySalesQty7d,
         daysWithoutSales: null,
         qtyAvailable: agg.qtyAvailable,
         avgPriceRub: agg.avgPriceRub,
@@ -170,6 +182,7 @@ export async function syncWbStockImport(marketplace: Marketplace) {
         productId,
         daysOfStockLeft,
         avgDailySalesQty,
+        avgDailySalesQty7d,
         qtyAvailable: agg.qtyAvailable,
         avgPriceRub: agg.avgPriceRub,
         syncedAt: new Date(),
@@ -228,6 +241,8 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
   const dateTo = new Date();
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - SALES_WINDOW_DAYS);
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - SALES_WINDOW_DAYS_7D);
   const [stockRows, warehouseRows, clusters, transactions, attributes] = await Promise.all([
     fetchOzonStocks(marketplace.id),
     fetchOzonStockByWarehouse(marketplace.id),
@@ -253,15 +268,18 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
 
   const vendorCodeBySku = new Map(rows.map((r) => [r.ozonSku, r.vendorCode]));
   const soldCountByVendorCode = new Map<string, number>();
+  const soldCountByVendorCode7d = new Map<string, number>();
   const revenueByVendorCode = new Map<string, number>();
   for (const t of transactions) {
     if (t.type !== "orders") continue;
     const nUnits = t.skus.length || 1;
     const perUnitAccruals = t.accrualsForSale / nUnits;
+    const isWithin7d = t.operationDate ? new Date(t.operationDate) >= sevenDaysAgo : false;
     for (const sku of t.skus) {
       const vendorCode = vendorCodeBySku.get(String(sku));
       if (!vendorCode) continue;
       soldCountByVendorCode.set(vendorCode, (soldCountByVendorCode.get(vendorCode) ?? 0) + 1);
+      if (isWithin7d) soldCountByVendorCode7d.set(vendorCode, (soldCountByVendorCode7d.get(vendorCode) ?? 0) + 1);
       revenueByVendorCode.set(vendorCode, (revenueByVendorCode.get(vendorCode) ?? 0) + perUnitAccruals);
     }
   }
@@ -385,7 +403,9 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
   for (const [productId, agg] of stockAggByProduct) {
     const canonicalSku = agg.skus[0];
     const soldCount = soldCountByVendorCode.get(agg.vendorCode) ?? 0;
+    const soldCount7d = soldCountByVendorCode7d.get(agg.vendorCode) ?? 0;
     const avgDailySalesQty = soldCount / SALES_WINDOW_DAYS;
+    const avgDailySalesQty7d = soldCount7d / SALES_WINDOW_DAYS_7D;
     const daysOfStockLeft = avgDailySalesQty > 0 ? Math.round(agg.qtyAvailable / avgDailySalesQty) : null;
     const avgPriceRub = soldCount > 0 ? (revenueByVendorCode.get(agg.vendorCode) ?? 0) / soldCount : null;
 
@@ -399,11 +419,12 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
         liquidityStatus: null,
         daysOfStockLeft,
         avgDailySalesQty,
+        avgDailySalesQty7d,
         avgPriceRub,
         daysWithoutSales: null,
         qtyAvailable: agg.qtyAvailable,
       },
-      update: { productId, daysOfStockLeft, avgDailySalesQty, avgPriceRub, qtyAvailable: agg.qtyAvailable, syncedAt: new Date() },
+      update: { productId, daysOfStockLeft, avgDailySalesQty, avgDailySalesQty7d, avgPriceRub, qtyAvailable: agg.qtyAvailable, syncedAt: new Date() },
     });
 
     await prisma.productStockAnalytics.deleteMany({
@@ -511,7 +532,11 @@ export async function syncYandexStockImport(marketplace: Marketplace) {
   // отдельности отвечали 200). fetchYandexStocks сам объединяет то, что
   // раньше было двумя независимыми функциями с задвоенными запросами.
   const { byOffer: rows, byWarehouse: warehouseRows } = await fetchYandexStocks(marketplace.id);
-  const salesRows = await fetchYandexMarketSalesByWarehouse(marketplace.id, SALES_WINDOW_DAYS);
+  const { byWarehouse: salesRows, byProduct: salesByProduct } = await fetchYandexMarketSalesByWarehouse(
+    marketplace.id,
+    SALES_WINDOW_DAYS
+  );
+  const sales7dByVendorCode = new Map(salesByProduct.map((s) => [s.vendorCode, s.soldQty7d]));
 
   const summary = { total: rows.length, updated: 0, pending: 0, skipped: 0 };
   const pendingCodes: string[] = [];
@@ -561,6 +586,13 @@ export async function syncYandexStockImport(marketplace: Marketplace) {
       });
       const avgDailySalesQty = existingAnalytics ? Number(existingAnalytics.avgDailySalesQty) : 0;
       const daysOfStockLeft = avgDailySalesQty > 0 ? Math.round(totalQty / avgDailySalesQty) : null;
+      // avgDailySalesQty (28д) намеренно не пересчитывается здесь — его
+      // источник истины сейчас ручной ежемесячный импорт отчёта "Аналитика
+      // продаж" (см. app/api/stock-import/yandex-analytics/route.ts).
+      // avgDailySalesQty7d, наоборот, можем посчитать прямо из уже
+      // полученных за этот синк доставленных заказов (fetchYandexMarketSalesByWarehouse) —
+      // свежие данные, отдельного импорта под них нет.
+      const avgDailySalesQty7d = (sales7dByVendorCode.get(row.vendorCode) ?? 0) / SALES_WINDOW_DAYS_7D;
 
       await prisma.productStockAnalytics.upsert({
         where: { marketplaceId_mpSku: { marketplaceId: marketplace.id, mpSku: row.vendorCode } },
@@ -572,10 +604,11 @@ export async function syncYandexStockImport(marketplace: Marketplace) {
           liquidityStatus: null,
           daysOfStockLeft,
           avgDailySalesQty,
+          avgDailySalesQty7d,
           daysWithoutSales: null,
           qtyAvailable: totalQty,
         },
-        update: { productId: matchedProductId, qtyAvailable: totalQty, daysOfStockLeft, syncedAt: new Date() },
+        update: { productId: matchedProductId, qtyAvailable: totalQty, daysOfStockLeft, avgDailySalesQty7d, syncedAt: new Date() },
       });
 
       summary.updated++;

@@ -161,6 +161,7 @@ export async function fetchYandexStocks(
 
 type OrdersResponse = {
   orders: {
+    creationDate?: string; // "dd-mm-yyyy hh:mm:ss" — тот же формат, что и в параметрах запроса (см. formatYandexDate)
     items: { offerId: string; count: number; partnerWarehouseId?: string }[];
   }[];
   paging?: { nextPageToken?: string };
@@ -170,6 +171,14 @@ function formatYandexDate(d: Date): string {
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   return `${dd}-${mm}-${d.getFullYear()}`;
+}
+
+function parseYandexDate(s: string | undefined): Date | null {
+  if (!s) return null;
+  const m = /^(\d{2})-(\d{2})-(\d{4})/.exec(s);
+  if (!m) return null;
+  const [, dd, mm, yyyy] = m;
+  return new Date(Number(yyyy), Number(mm) - 1, Number(dd));
 }
 
 /**
@@ -185,8 +194,8 @@ async function fetchCampaignOrdersByWarehouse(
   campaignId: string,
   dateFrom: Date,
   dateTo: Date
-): Promise<{ offerId: string; warehouseId: string; qty: number }[]> {
-  const rows: { offerId: string; warehouseId: string; qty: number }[] = [];
+): Promise<{ offerId: string; warehouseId: string; qty: number; date: Date | null }[]> {
+  const rows: { offerId: string; warehouseId: string; qty: number; date: Date | null }[] = [];
   let pageToken: string | undefined;
 
   for (;;) {
@@ -208,9 +217,10 @@ async function fetchCampaignOrdersByWarehouse(
     const data: OrdersResponse = await res.json();
 
     for (const order of data.orders) {
+      const date = parseYandexDate(order.creationDate);
       for (const item of order.items) {
         if (!item.partnerWarehouseId) continue;
-        rows.push({ offerId: item.offerId, warehouseId: item.partnerWarehouseId, qty: item.count });
+        rows.push({ offerId: item.offerId, warehouseId: item.partnerWarehouseId, qty: item.count, date });
       }
     }
 
@@ -223,6 +233,7 @@ async function fetchCampaignOrdersByWarehouse(
 }
 
 export type YandexWarehouseSalesRow = { vendorCode: string; warehouseName: string; soldQty: number };
+export type YandexProductSalesRow = { vendorCode: string; soldQtyTotal: number; soldQty7d: number };
 
 /**
  * Продажи по каждому физическому складу отдельно (FBY + FBS вместе) за
@@ -230,11 +241,21 @@ export type YandexWarehouseSalesRow = { vendorCode: string; warehouseName: strin
  * в распределении поставок. windowDays должно быть ≤ 30 (лимит Yandex на
  * диапазон одного запроса) — если синку нужно окно шире, это отдельная
  * доработка (несколько последовательных запросов), сейчас не требуется.
+ *
+ * byProduct — та же выборка (без повторного запроса), просуммированная по
+ * товару целиком (не по складу) и разбитая на "за весь windowDays" и "за
+ * последние 7 дней" — для сравнения недавней скорости продаж с более
+ * длинным средним в Планировщике.
  */
-export async function fetchYandexMarketSalesByWarehouse(marketplaceId: string, windowDays: number): Promise<YandexWarehouseSalesRow[]> {
+export async function fetchYandexMarketSalesByWarehouse(
+  marketplaceId: string,
+  windowDays: number
+): Promise<{ byWarehouse: YandexWarehouseSalesRow[]; byProduct: YandexProductSalesRow[] }> {
   const dateTo = new Date();
   const dateFrom = new Date();
   dateFrom.setDate(dateFrom.getDate() - windowDays);
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
   const { fbyCampaignId, fbsCampaignId } = await getYandexCredentials(marketplaceId);
   const [fboItems, fbsItems, warehouseNames] = await Promise.all([
@@ -242,16 +263,29 @@ export async function fetchYandexMarketSalesByWarehouse(marketplaceId: string, w
     fetchCampaignOrdersByWarehouse(marketplaceId, fbsCampaignId, dateFrom, dateTo),
     fetchYandexWarehouseNames(marketplaceId),
   ]);
+  const allItems = [...fboItems, ...fbsItems];
 
   const byKey = new Map<string, YandexWarehouseSalesRow>();
-  for (const item of [...fboItems, ...fbsItems]) {
+  for (const item of allItems) {
     const warehouseName = warehouseNames.get(Number(item.warehouseId)) ?? `Склад #${item.warehouseId}`;
     const key = `${item.offerId}|${warehouseName}`;
     const existing = byKey.get(key);
     if (existing) existing.soldQty += item.qty;
     else byKey.set(key, { vendorCode: item.offerId, warehouseName, soldQty: item.qty });
   }
-  return [...byKey.values()];
+
+  const byProductMap = new Map<string, YandexProductSalesRow>();
+  for (const item of allItems) {
+    let agg = byProductMap.get(item.offerId);
+    if (!agg) {
+      agg = { vendorCode: item.offerId, soldQtyTotal: 0, soldQty7d: 0 };
+      byProductMap.set(item.offerId, agg);
+    }
+    agg.soldQtyTotal += item.qty;
+    if (item.date && item.date >= sevenDaysAgo) agg.soldQty7d += item.qty;
+  }
+
+  return { byWarehouse: [...byKey.values()], byProduct: [...byProductMap.values()] };
 }
 
 export type YandexMarketMonthlySale = { offerId: string; year: number; month: number; qty: number };

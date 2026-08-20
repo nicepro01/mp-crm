@@ -119,6 +119,7 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
     buybackPct: number | null;
     qtyAvailable: number;
     avgDailySalesQty: number;
+    avgDailySalesQty7d: number;
     seasonalDemandMultiplier: number;
     unitsPerBox: number;
     boxWeightKg: number;
@@ -141,6 +142,7 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
         buybackPct: buybackByProduct.get(productId) ?? null,
         qtyAvailable: 0,
         avgDailySalesQty: 0,
+        avgDailySalesQty7d: 0,
         seasonalDemandMultiplier: Number(product.seasonalDemandMultiplier),
         unitsPerBox: product.unitsPerBox,
         boxWeightKg: Number(product.boxWeightKg),
@@ -161,6 +163,7 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
     if (!acc) continue;
     acc.qtyAvailable += r.qtyAvailable;
     acc.avgDailySalesQty += Number(r.avgDailySalesQty);
+    acc.avgDailySalesQty7d += Number(r.avgDailySalesQty7d);
   }
 
   const rows: PlannerRow[] = [...byProduct.values()]
@@ -189,6 +192,7 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
         qtyAvailable: acc.qtyAvailable,
         qtyInTransit,
         avgDailySalesQty: Math.round(acc.avgDailySalesQty * 100) / 100,
+        avgDailySalesQty7d: Math.round(acc.avgDailySalesQty7d * 100) / 100,
         daysOfStockLeft,
         daysOfStockLeftAfterArrival,
         recommendedOrderQty,
@@ -215,6 +219,7 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
     marketplaceId: string;
     qtyAvailable: number;
     avgDaily: number;
+    avgDaily7d: number;
     daysOfStockLeft: number | null;
     rawNeed: number;
     recommendedOrderQty: number;
@@ -224,6 +229,7 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
   const rawStatsByProduct = new Map<string, RawMarketplaceStat[]>();
   for (const r of stockRows) {
     const avgDaily = Number(r.avgDailySalesQty);
+    const avgDaily7d = Number(r.avgDailySalesQty7d);
     const leadTimeDays = leadTimeByProduct.get(r.productId) ?? DEFAULT_LEAD_TIME_DAYS;
     const moq = moqByProduct.get(r.productId) ?? null;
     const seasonal = effectiveSeasonalMultiplier(r.productId, manualSeasonalByProduct.get(r.productId) ?? 1, leadTimeDays);
@@ -241,6 +247,7 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
       marketplaceId: r.marketplaceId,
       qtyAvailable: r.qtyAvailable,
       avgDaily,
+      avgDaily7d,
       daysOfStockLeft,
       rawNeed,
       recommendedOrderQty,
@@ -255,6 +262,7 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
     (marketplaceStats[l.marketplaceId] ??= {})[l.productId] ??= {
       qtyAvailable: 0,
       avgDailySalesQty: 0,
+      avgDailySalesQty7d: 0,
       daysOfStockLeft: null,
       daysOfStockLeftAfterArrival: null,
       qtyInTransitAllocated: 0,
@@ -276,6 +284,7 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
       (marketplaceStats[s.marketplaceId] ??= {})[productId] = {
         qtyAvailable: s.qtyAvailable,
         avgDailySalesQty: Math.round(s.avgDaily * 100) / 100,
+        avgDailySalesQty7d: Math.round(s.avgDaily7d * 100) / 100,
         daysOfStockLeft: s.daysOfStockLeft,
         daysOfStockLeftAfterArrival,
         qtyInTransitAllocated,

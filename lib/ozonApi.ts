@@ -210,6 +210,7 @@ export type OzonTransactionRow = {
   // считалось в 2-4 раза больше реального — см. использование в
   // lib/unitEconomicsSync.ts.
   postingNumber: string;
+  operationDate: string; // operation_date — для расчёта продаж/день за более узкое окно (7д), чем весь запрошенный период
 };
 
 type TransactionListResponse = {
@@ -217,6 +218,7 @@ type TransactionListResponse = {
     operations: {
       operation_type_name: string;
       type: string;
+      operation_date: string;
       accruals_for_sale: number;
       sale_commission: number;
       amount: number;
@@ -258,6 +260,7 @@ export async function fetchOzonFinanceTransactions(
         skus: op.items.map((i) => i.sku),
         warehouseId: op.posting?.warehouse_id ?? 0,
         postingNumber: op.posting?.posting_number ?? "",
+        operationDate: op.operation_date ?? "",
       });
     }
 
