@@ -56,7 +56,7 @@ async function EditSupplierPageContent(params: { id: string }) {
     ]),
   ];
 
-  const [photoRows, stockSums, inTransitSums, marketplaceStockRows] = await Promise.all([
+  const [photoRows, stockSums, inTransitSums, marketplaceStockRows, fulfillmentListings] = await Promise.all([
     prisma.product.findMany({ where: { id: { in: allProductIds } }, select: { id: true, photoUrl: true } }),
     prisma.stock.groupBy({
       by: ["productId"],
@@ -71,6 +71,12 @@ async function EditSupplierPageContent(params: { id: string }) {
     prisma.productStockAnalytics.findMany({
       where: { productId: { in: allProductIds } },
       include: { marketplace: { select: { name: true } } },
+    }),
+    // FBO/FBS — вручную проставляется на листинге конкретной площадки (см.
+    // MpListing.fulfillmentSchema), площадка сама через API это не отдаёт.
+    prisma.mpListing.findMany({
+      where: { productId: { in: allProductIds }, fulfillmentSchema: { not: null } },
+      select: { productId: true, fulfillmentSchema: true, marketplace: { select: { name: true } } },
     }),
   ]);
 
@@ -92,6 +98,17 @@ async function EditSupplierPageContent(params: { id: string }) {
     marketplaceNameById.get(a)!.localeCompare(marketplaceNameById.get(b)!, "ru")
   );
 
+  const fulfillmentPartsByProduct = new Map<string, string[]>();
+  for (const l of fulfillmentListings) {
+    if (!l.fulfillmentSchema) continue;
+    const parts = fulfillmentPartsByProduct.get(l.productId) ?? [];
+    parts.push(`${l.marketplace.name}: ${l.fulfillmentSchema}`);
+    fulfillmentPartsByProduct.set(l.productId, parts);
+  }
+  const fulfillmentByProduct = new Map(
+    [...fulfillmentPartsByProduct.entries()].map(([productId, parts]) => [productId, parts.join(", ")])
+  );
+
   function renderPhotoCell(productId: string) {
     return (
       <td>
@@ -104,6 +121,7 @@ async function EditSupplierPageContent(params: { id: string }) {
     const byMarketplace = marketplaceStockByProduct.get(productId);
     return (
       <>
+        <td>{fulfillmentByProduct.get(productId) ?? "—"}</td>
         <td>{stockByProduct.get(productId) ?? 0}</td>
         <td>{inTransitByProduct.get(productId) || "—"}</td>
         {marketplaceIdsPresent.map((mpId) => (
@@ -116,6 +134,7 @@ async function EditSupplierPageContent(params: { id: string }) {
   function stockHeaderCells() {
     return (
       <>
+        <th>Схема</th>
         <th>Остаток</th>
         <th>В пути</th>
         {marketplaceIdsPresent.map((mpId) => (
