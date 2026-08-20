@@ -103,24 +103,6 @@ export type YandexMarketStockRow = {
   fbsQty: number;
 };
 
-/** Тянет остатки по FBY (наш "FBO") и FBS кампаниям, сводит по артикулу продавца. */
-export async function fetchYandexMarketStocks(marketplaceId: string): Promise<YandexMarketStockRow[]> {
-  const { fbyCampaignId, fbsCampaignId } = await getYandexCredentials(marketplaceId);
-  const [fboRows, fbsRows] = await Promise.all([
-    fetchCampaignStocksByWarehouse(marketplaceId, fbyCampaignId),
-    fetchCampaignStocksByWarehouse(marketplaceId, fbsCampaignId),
-  ]);
-  const fboByOffer = sumByOfferId(fboRows);
-  const fbsByOffer = sumByOfferId(fbsRows);
-
-  const allOfferIds = new Set([...fboByOffer.keys(), ...fbsByOffer.keys()]);
-  return [...allOfferIds].map((vendorCode) => ({
-    vendorCode,
-    fboQty: fboByOffer.get(vendorCode) ?? 0,
-    fbsQty: fbsByOffer.get(vendorCode) ?? 0,
-  }));
-}
-
 export type YandexWarehouseStockRow = {
   vendorCode: string;
   warehouseName: string; // из /warehouses по id; если склада нет в справочнике — "Склад #<id>"
@@ -140,28 +122,41 @@ async function fetchYandexWarehouseNames(marketplaceId: string): Promise<Map<num
 }
 
 /**
- * Остатки по каждому физическому складу отдельно (FBY + FBS вместе) — для
- * распределения поставок по городам. Продажи по складу — отдельная функция
- * fetchYandexMarketSalesByWarehouse() ниже (через /orders, не через
- * рейт-лимитированный отчёт shows-sales).
+ * Остатки FBY+FBS сразу в двух разрезах — по артикулу (fetchYandexMarketStocks
+ * раньше) и по физическому складу (fetchYandexMarketStockByWarehouse раньше).
+ * Объединены в один вызов: раньше оба разреза независимо перезапрашивали одни
+ * и те же /offers/stocks по FBY и FBS (буквально дважды одни и те же данные),
+ * что вместе с остальными запросами синка стабильно приводило к
+ * "INTERNAL_ERROR" от Yandex Market API — проверено эмпирически на проде.
+ * Последовательно, не Promise.all — та же причина.
  */
-export async function fetchYandexMarketStockByWarehouse(marketplaceId: string): Promise<YandexWarehouseStockRow[]> {
+export async function fetchYandexStocks(
+  marketplaceId: string
+): Promise<{ byOffer: YandexMarketStockRow[]; byWarehouse: YandexWarehouseStockRow[] }> {
   const { fbyCampaignId, fbsCampaignId } = await getYandexCredentials(marketplaceId);
-  const [fboRows, fbsRows, warehouseNames] = await Promise.all([
-    fetchCampaignStocksByWarehouse(marketplaceId, fbyCampaignId),
-    fetchCampaignStocksByWarehouse(marketplaceId, fbsCampaignId),
-    fetchYandexWarehouseNames(marketplaceId),
-  ]);
+  const fboRows = await fetchCampaignStocksByWarehouse(marketplaceId, fbyCampaignId);
+  const fbsRows = await fetchCampaignStocksByWarehouse(marketplaceId, fbsCampaignId);
+  const warehouseNames = await fetchYandexWarehouseNames(marketplaceId);
 
-  const byKey = new Map<string, YandexWarehouseStockRow>();
+  const fboByOffer = sumByOfferId(fboRows);
+  const fbsByOffer = sumByOfferId(fbsRows);
+  const allOfferIds = new Set([...fboByOffer.keys(), ...fbsByOffer.keys()]);
+  const byOffer = [...allOfferIds].map((vendorCode) => ({
+    vendorCode,
+    fboQty: fboByOffer.get(vendorCode) ?? 0,
+    fbsQty: fbsByOffer.get(vendorCode) ?? 0,
+  }));
+
+  const byWarehouseMap = new Map<string, YandexWarehouseStockRow>();
   for (const r of [...fboRows, ...fbsRows]) {
     const warehouseName = warehouseNames.get(r.warehouseId) ?? `Склад #${r.warehouseId}`;
     const key = `${r.offerId}|${warehouseName}`;
-    const existing = byKey.get(key);
+    const existing = byWarehouseMap.get(key);
     if (existing) existing.qtyAvailable += r.qty;
-    else byKey.set(key, { vendorCode: r.offerId, warehouseName, qtyAvailable: r.qty });
+    else byWarehouseMap.set(key, { vendorCode: r.offerId, warehouseName, qtyAvailable: r.qty });
   }
-  return [...byKey.values()];
+
+  return { byOffer, byWarehouse: [...byWarehouseMap.values()] };
 }
 
 type OrdersResponse = {

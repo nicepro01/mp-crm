@@ -10,11 +10,7 @@ import {
   fetchOzonFinanceTransactions,
   fetchOzonProductAttributes,
 } from "./ozonApi";
-import {
-  fetchYandexMarketStocks,
-  fetchYandexMarketStockByWarehouse,
-  fetchYandexMarketSalesByWarehouse,
-} from "./yandexMarketApi";
+import { fetchYandexStocks, fetchYandexMarketSalesByWarehouse } from "./yandexMarketApi";
 import { upsertImportItem } from "./matching";
 
 // Извлечено из app/api/stock-import/{wb,ozon,yandex}-sync/route.ts без
@@ -509,13 +505,12 @@ export async function syncYandexStockImport(marketplace: Marketplace) {
     );
   }
 
-  // Последовательно, не Promise.all — каждый из трёх вызовов сам ещё делает
-  // 2-3 параллельных запроса к Yandex Market API (FBY+FBS+склады), и вместе
-  // с этими тремя верхнего уровня выходило до 7 одновременных запросов —
-  // на проде это стабильно валило API с "INTERNAL_ERROR" (проверено
-  // эмпирически: каждый из этих же запросов по отдельности отвечал 200).
-  const rows = await fetchYandexMarketStocks(marketplace.id);
-  const warehouseRows = await fetchYandexMarketStockByWarehouse(marketplace.id);
+  // Последовательно, не Promise.all — параллельные запросы к Yandex Market
+  // API (FBY+FBS+склады+заказы одновременно) на проде стабильно валили его
+  // с "INTERNAL_ERROR" (проверено эмпирически: те же самые запросы по
+  // отдельности отвечали 200). fetchYandexStocks сам объединяет то, что
+  // раньше было двумя независимыми функциями с задвоенными запросами.
+  const { byOffer: rows, byWarehouse: warehouseRows } = await fetchYandexStocks(marketplace.id);
   const salesRows = await fetchYandexMarketSalesByWarehouse(marketplace.id, SALES_WINDOW_DAYS);
 
   const summary = { total: rows.length, updated: 0, pending: 0, skipped: 0 };
