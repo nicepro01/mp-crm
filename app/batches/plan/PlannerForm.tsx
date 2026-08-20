@@ -426,6 +426,16 @@ export default function PlannerForm({
     [rows, marketplaceNames]
   );
 
+  // Вкладки по поставщику — заказ физически оформляется одному поставщику
+  // за раз (у каждого свой день отгрузки), в отличие от вкладок площадки
+  // это просто фильтр строк без своих цифр: "Рекомендовано" тут то же
+  // общее количество, что и на "Общей" — площадка, куда потом уйдёт товар,
+  // для заказа у поставщика не важна.
+  const supplierNamesPresent = useMemo(
+    () => [...new Set(rows.map((r) => r.supplierName).filter((s): s is string => !!s))].sort((a, b) => a.localeCompare(b, "ru")),
+    [rows]
+  );
+
   const totals = useMemo(() => {
     const t = groupSubtotal(rows);
     return { count: t.count, sum: Math.round(t.sum * 100) / 100, weightKg: t.weightKg, volumeM3: t.volumeM3 };
@@ -530,6 +540,14 @@ export default function PlannerForm({
 
   const tabs = [
     { key: "all", label: `Общая (${rows.length})`, content: renderTable(rows) },
+    ...supplierNamesPresent.map((supplierName) => {
+      const tabRows = rows.filter((r) => r.supplierName === supplierName);
+      return {
+        key: `supplier:${supplierName}`,
+        label: `${supplierName} (${tabRows.length})`,
+        content: renderTable(tabRows),
+      };
+    }),
     ...marketplaceIdsPresent.map((marketplaceId) => {
       const tabRows = rows.filter((r) => r.marketplaceIds.includes(marketplaceId));
       return {
