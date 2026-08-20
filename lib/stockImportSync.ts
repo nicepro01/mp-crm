@@ -509,11 +509,14 @@ export async function syncYandexStockImport(marketplace: Marketplace) {
     );
   }
 
-  const [rows, warehouseRows, salesRows] = await Promise.all([
-    fetchYandexMarketStocks(marketplace.id),
-    fetchYandexMarketStockByWarehouse(marketplace.id),
-    fetchYandexMarketSalesByWarehouse(marketplace.id, SALES_WINDOW_DAYS),
-  ]);
+  // Последовательно, не Promise.all — каждый из трёх вызовов сам ещё делает
+  // 2-3 параллельных запроса к Yandex Market API (FBY+FBS+склады), и вместе
+  // с этими тремя верхнего уровня выходило до 7 одновременных запросов —
+  // на проде это стабильно валило API с "INTERNAL_ERROR" (проверено
+  // эмпирически: каждый из этих же запросов по отдельности отвечал 200).
+  const rows = await fetchYandexMarketStocks(marketplace.id);
+  const warehouseRows = await fetchYandexMarketStockByWarehouse(marketplace.id);
+  const salesRows = await fetchYandexMarketSalesByWarehouse(marketplace.id, SALES_WINDOW_DAYS);
 
   const summary = { total: rows.length, updated: 0, pending: 0, skipped: 0 };
   const pendingCodes: string[] = [];
