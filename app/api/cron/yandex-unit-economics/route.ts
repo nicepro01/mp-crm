@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { runWithTenant } from "@/lib/tenantContext";
-import { runFullYandexSync } from "@/lib/dailySync";
+import { runYandexUnitEconomicsSync } from "@/lib/dailySync";
 
+// См. app/api/cron/ozon-unit-economics/route.ts — тот же приём разбиения на
+// отдельные ночные вызовы, теперь и для Яндекса (см. lib/dailySync.ts —
+// комментарий у runMarketplaceSubSync — обязательная пауза 130с между
+// FBY/FBS отчётами сама по себе съедала половину бюджета в 300с).
 export const maxDuration = 300;
 
 function isAuthorized(req: NextRequest): boolean {
@@ -22,7 +26,7 @@ export async function GET(req: NextRequest) {
   for (const company of companies) {
     const userId = company.users[0]?.id ?? company.id;
     try {
-      results[company.id] = await runWithTenant({ companyId: company.id, userId }, runFullYandexSync);
+      results[company.id] = await runWithTenant({ companyId: company.id, userId }, runYandexUnitEconomicsSync);
     } catch (err: any) {
       results[company.id] = { error: err?.message ?? "неизвестная ошибка" };
     }

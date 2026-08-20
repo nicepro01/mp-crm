@@ -20,15 +20,19 @@ const PUBLIC_PATHS = new Set([
   // защиту делают сами роуты через заголовок Authorization: Bearer
   // <CRON_SECRET> (см. app/api/cron/*/route.ts), а не через логин.
   "/api/cron/wb",
-  "/api/cron/yandex",
-  // Ozon разбит на отдельные ночные вызовы (юнит-экономика/график/
-  // сезонность/остатки/здоровье карточки) — общий синк на все под-синки
-  // сразу упирался в лимит времени Vercel Hobby (см. lib/dailySync.ts).
+  // Ozon и Яндекс разбиты на отдельные ночные вызовы (юнит-экономика/график/
+  // сезонность/остатки[/здоровье карточки — только Ozon]) — общий синк на
+  // все под-синки сразу упирался в лимит времени Vercel Hobby (см.
+  // lib/dailySync.ts).
   "/api/cron/ozon-unit-economics",
   "/api/cron/ozon-funnel",
   "/api/cron/ozon-seasonality",
   "/api/cron/ozon-stock-import",
   "/api/cron/ozon-card-health",
+  "/api/cron/yandex-unit-economics",
+  "/api/cron/yandex-funnel",
+  "/api/cron/yandex-seasonality",
+  "/api/cron/yandex-stock-import",
 ]);
 
 // Без сессии: публичные страницы/API пропускаем как есть, остальные API —

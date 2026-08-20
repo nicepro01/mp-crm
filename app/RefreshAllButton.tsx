@@ -2,11 +2,14 @@
 
 import { useState } from "react";
 
-// Ozon разбит на 4 отдельных вызова (юнит-экономика/график/сезонность/
-// остатки) — с реальными данными общий вызов на всё сразу упирался в лимит
-// времени Vercel Hobby (300с), даже когда магазины одной площадки уже шли
-// параллельно друг другу (см. lib/dailySync.ts). WB/Яндекс пока укладываются
-// в лимит одним вызовом, поэтому не разбиты. В попапе несколько эндпоинтов с
+// Ozon и Яндекс разбиты на отдельные вызовы (юнит-экономика/график/
+// сезонность/остатки[/здоровье карточки — только Ozon]) — с реальными
+// данными общий вызов на всё сразу упирался в лимит времени Vercel Hobby
+// (300с), даже когда магазины одной площадки уже шли параллельно друг другу
+// (см. lib/dailySync.ts). У Яндекса отдельно обязательная пауза 130с между
+// FBY/FBS отчётами сама по себе съедала половину бюджета — синк молча падал
+// по таймауту каждую ночь 17 дней подряд, пока это не разбили. WB пока
+// укладывается в лимит одним вызовом. В попапе несколько эндпоинтов с
 // одинаковым label схлопываются в одну строку (см. handleClick).
 const ENDPOINTS: { key: string; label: string; path: string }[] = [
   { key: "wb", label: "WB", path: "/api/daily-sync/wb" },
@@ -15,7 +18,10 @@ const ENDPOINTS: { key: string; label: string; path: string }[] = [
   { key: "ozon-seasonality", label: "Ozon", path: "/api/daily-sync/ozon-seasonality" },
   { key: "ozon-stock-import", label: "Ozon", path: "/api/daily-sync/ozon-stock-import" },
   { key: "ozon-card-health", label: "Ozon", path: "/api/daily-sync/ozon-card-health" },
-  { key: "yandex", label: "Яндекс.Маркет", path: "/api/daily-sync/yandex" },
+  { key: "yandex-unit-economics", label: "Яндекс.Маркет", path: "/api/daily-sync/yandex-unit-economics" },
+  { key: "yandex-funnel", label: "Яндекс.Маркет", path: "/api/daily-sync/yandex-funnel" },
+  { key: "yandex-seasonality", label: "Яндекс.Маркет", path: "/api/daily-sync/yandex-seasonality" },
+  { key: "yandex-stock-import", label: "Яндекс.Маркет", path: "/api/daily-sync/yandex-stock-import" },
 ];
 
 type MarketplaceOutcome = { label: string; ok: boolean; detail: string };

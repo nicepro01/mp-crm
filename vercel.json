@@ -6,6 +6,9 @@
     { "path": "/api/cron/ozon-seasonality", "schedule": "0 21 * * *" },
     { "path": "/api/cron/ozon-stock-import", "schedule": "0 21 * * *" },
     { "path": "/api/cron/ozon-card-health", "schedule": "0 21 * * *" },
-    { "path": "/api/cron/yandex", "schedule": "0 21 * * *" }
+    { "path": "/api/cron/yandex-unit-economics", "schedule": "0 21 * * *" },
+    { "path": "/api/cron/yandex-funnel", "schedule": "0 21 * * *" },
+    { "path": "/api/cron/yandex-seasonality", "schedule": "0 21 * * *" },
+    { "path": "/api/cron/yandex-stock-import", "schedule": "0 21 * * *" }
   ]
 }
