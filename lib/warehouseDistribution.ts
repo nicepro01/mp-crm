@@ -53,7 +53,7 @@ export async function computeWarehouseDistribution(
     }),
     prisma.productMonthlySales.findMany({
       where: { productId: { in: productIds } },
-      select: { productId: true, month: true, qtySold: true, daysInPeriod: true },
+      select: { productId: true, year: true, month: true, qtySold: true, daysInPeriod: true },
     }),
   ]);
   const productById = new Map(products.map((p) => [p.id, p]));
@@ -109,7 +109,7 @@ export async function computeWarehouseDistribution(
     const leadTimeDays = product.supplier?.leadTimeDays ?? DEFAULT_LEAD_TIME_DAYS;
 
     const monthlyRows = monthlySalesByProduct.get(item.productId) ?? [];
-    const seasonalIndex = computeSeasonalIndex(monthlyRows);
+    const seasonalIndex = computeSeasonalIndex(monthlyRows, today);
     const seasonalValue =
       seasonalIndex.size > 0
         ? seasonalWeightForWindow(seasonalIndex, today, leadTimeDays)

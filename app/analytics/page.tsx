@@ -311,7 +311,7 @@ async function AnalyticsPageContent() {
   // с карточки товара (см. lib/seasonality.ts).
   const monthlySales = await prisma.productMonthlySales.findMany({
     where: { productId: { in: [...new Set(rows.map((r) => r.productId))] } },
-    select: { productId: true, month: true, qtySold: true, daysInPeriod: true },
+    select: { productId: true, year: true, month: true, qtySold: true, daysInPeriod: true },
   });
   const monthlySalesByProduct = new Map<string, typeof monthlySales>();
   for (const m of monthlySales) {
@@ -319,13 +319,13 @@ async function AnalyticsPageContent() {
     list.push(m);
     monthlySalesByProduct.set(m.productId, list);
   }
+  const today = new Date();
   const seasonalIndexByProduct = new Map(
     [...monthlySalesByProduct.entries()].map(([productId, mRows]) => [
       productId,
-      computeSeasonalIndex(mRows),
+      computeSeasonalIndex(mRows, today),
     ])
   );
-  const today = new Date();
   function effectiveSeasonalMultiplier(productId: string, manualMultiplier: number, horizonDays: number) {
     const index = seasonalIndexByProduct.get(productId);
     if (!index || index.size === 0) return { value: manualMultiplier, fromHistory: false };

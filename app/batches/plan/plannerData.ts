@@ -40,7 +40,7 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
     }),
     prisma.productMonthlySales.findMany({
       where: { product: { isActive: true } },
-      select: { productId: true, month: true, qtySold: true, daysInPeriod: true },
+      select: { productId: true, year: true, month: true, qtySold: true, daysInPeriod: true },
     }),
     prisma.unitEconomics.findMany({
       where: { marketplace: "WB", buybackPct: { not: null } },
@@ -76,10 +76,10 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
     list.push(m);
     monthlySalesByProduct.set(m.productId, list);
   }
-  const seasonalIndexByProduct = new Map(
-    [...monthlySalesByProduct.entries()].map(([productId, rows]) => [productId, computeSeasonalIndex(rows)])
-  );
   const today = new Date();
+  const seasonalIndexByProduct = new Map(
+    [...monthlySalesByProduct.entries()].map(([productId, rows]) => [productId, computeSeasonalIndex(rows, today)])
+  );
   function effectiveSeasonalMultiplier(productId: string, manualMultiplier: number, horizonDays: number) {
     const index = seasonalIndexByProduct.get(productId);
     if (!index || index.size === 0) return { value: manualMultiplier, fromHistory: false };
