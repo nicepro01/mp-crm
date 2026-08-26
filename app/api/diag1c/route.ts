@@ -25,6 +25,17 @@ export async function POST(req: NextRequest) {
       bodySnippet: text.slice(0, 2000),
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err?.message ?? String(err), name: err?.name }, { status: 500 });
+    const cause = err?.cause;
+    return NextResponse.json(
+      {
+        error: err?.message ?? String(err),
+        name: err?.name,
+        causeMessage: cause?.message,
+        causeName: cause?.name,
+        causeCode: cause?.code,
+        causeErrno: cause?.errno,
+      },
+      { status: 500 }
+    );
   }
 }
