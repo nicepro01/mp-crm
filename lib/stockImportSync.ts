@@ -430,7 +430,7 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
     const daysOfStockLeft = avgDailySalesQty > 0 ? Math.round(agg.qtyAvailable / avgDailySalesQty) : null;
     const avgPriceRub = soldCount > 0 ? (revenueByVendorCode.get(agg.vendorCode) ?? 0) / soldCount : null;
 
-    await prisma.productStockAnalytics.upsert({
+    const upsertPromise = prisma.productStockAnalytics.upsert({
       where: { marketplaceId_mpSku: { marketplaceId: marketplace.id, mpSku: canonicalSku } },
       create: {
         companyId: getCurrentCompanyId(),
@@ -448,9 +448,22 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
       update: { productId, daysOfStockLeft, avgDailySalesQty, avgDailySalesQty7d, avgPriceRub, qtyAvailable: agg.qtyAvailable, syncedAt: new Date() },
     });
 
-    await prisma.productStockAnalytics.deleteMany({
-      where: { marketplaceId: marketplace.id, productId, mpSku: { not: canonicalSku } },
-    });
+    // deleteMany нужен только если у товара реально несколько Ozon SKU
+    // (объединились в один matchedProductId) — обычный случай (один SKU)
+    // раньше всё равно гонял этот запрос вхолостую на каждый товар, что при
+    // ~150 товарах удваивало число обращений к БД во втором проходе и было
+    // основной причиной, почему он не успевал уложиться в лимит времени
+    // Vercel (проверено эмпирически).
+    if (agg.skus.length > 1) {
+      await Promise.all([
+        upsertPromise,
+        prisma.productStockAnalytics.deleteMany({
+          where: { marketplaceId: marketplace.id, productId, mpSku: { not: canonicalSku } },
+        }),
+      ]);
+    } else {
+      await upsertPromise;
+    }
   }
 
   const warehouseNameToCluster = new Map(clusters.map((c) => [c.warehouseName, c.clusterName]));
