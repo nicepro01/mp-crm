@@ -318,28 +318,35 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
         : null;
 
     if (matchedProductId) {
-      await prisma.stock.upsert({
-        where: { productId_warehouseId: { productId: matchedProductId, warehouseId: fboWarehouse.id } },
-        create: {
-          companyId: getCurrentCompanyId(),
-          productId: matchedProductId,
-          warehouseId: fboWarehouse.id,
-          qtyAvailable: row.qtyAvailableFbo,
-          syncSource: "ozon_api",
-        },
-        update: { qtyAvailable: row.qtyAvailableFbo, syncSource: "ozon_api", syncedAt: new Date() },
-      });
-      await prisma.stock.upsert({
-        where: { productId_warehouseId: { productId: matchedProductId, warehouseId: fbsWarehouse.id } },
-        create: {
-          companyId: getCurrentCompanyId(),
-          productId: matchedProductId,
-          warehouseId: fbsWarehouse.id,
-          qtyAvailable: row.qtyAvailableFbs,
-          syncSource: "ozon_api",
-        },
-        update: { qtyAvailable: row.qtyAvailableFbs, syncSource: "ozon_api", syncedAt: new Date() },
-      });
+      // FBO и FBS — параллельно, не последовательно: это два независимых
+      // upsert на разные строки Stock, второй запрос не ждёт результата
+      // первого, вставленный сюда после FBS-доработки цикл иначе удваивал
+      // время всего синка и стал регулярно не укладываться в 300с лимит
+      // Vercel (проверено эмпирически на реальном прогоне).
+      await Promise.all([
+        prisma.stock.upsert({
+          where: { productId_warehouseId: { productId: matchedProductId, warehouseId: fboWarehouse.id } },
+          create: {
+            companyId: getCurrentCompanyId(),
+            productId: matchedProductId,
+            warehouseId: fboWarehouse.id,
+            qtyAvailable: row.qtyAvailableFbo,
+            syncSource: "ozon_api",
+          },
+          update: { qtyAvailable: row.qtyAvailableFbo, syncSource: "ozon_api", syncedAt: new Date() },
+        }),
+        prisma.stock.upsert({
+          where: { productId_warehouseId: { productId: matchedProductId, warehouseId: fbsWarehouse.id } },
+          create: {
+            companyId: getCurrentCompanyId(),
+            productId: matchedProductId,
+            warehouseId: fbsWarehouse.id,
+            qtyAvailable: row.qtyAvailableFbs,
+            syncSource: "ozon_api",
+          },
+          update: { qtyAvailable: row.qtyAvailableFbs, syncSource: "ozon_api", syncedAt: new Date() },
+        }),
+      ]);
 
       // Донасыщаем реальными вес/габаритами, фото и названием от площадки —
       // вес/габариты только если у товара сейчас стоит явная заглушка
