@@ -29,7 +29,7 @@ export type PlannerData = {
 } | null; // null — вообще нет активных листингов под этот фильтр
 
 export async function buildPlannerData(supplierCountry: SupplierCountry): Promise<PlannerData> {
-  const [activeListingsRaw, allStockRowsRaw, monthlySales, buybackRows, allWarehouseRowsRaw] = await Promise.all([
+  const [activeListingsRaw, allStockRowsRaw, monthlySales, buybackRows, allWarehouseRowsRaw, fboFbsStockRowsRaw] = await Promise.all([
     prisma.mpListing.findMany({
       where: { isActive: true, product: { isActive: true } },
       include: { product: { include: { supplier: true } }, marketplace: { select: { name: true } } },
@@ -50,6 +50,18 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
     prisma.productWarehouseAnalytics.findMany({
       where: { product: { isActive: true } },
       include: { product: { select: { supplierId: true } }, marketplace: { select: { name: true } } },
+    }),
+    // Реальный остаток по схеме продажи (FBO/FBS) — из Stock, а не
+    // ProductStockAnalytics (та хранит только общую цифру по площадке в
+    // целом). warehouse.marketplaceId нужен, чтобы отфильтровать по тем же
+    // activeListingKeys, что и остальные источники ниже (не тянуть остаток
+    // со склада площадки, на которой товар уже неактивен).
+    prisma.stock.findMany({
+      where: {
+        product: { isActive: true, supplier: { country: supplierCountry } },
+        warehouse: { type: { in: ["MARKETPLACE_FBO", "MARKETPLACE_FBS"] } },
+      },
+      select: { productId: true, qtyAvailable: true, warehouse: { select: { type: true, marketplaceId: true } } },
     }),
   ]);
 
@@ -91,6 +103,9 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
   const activeListingKeys = new Set(activeListings.map((l) => `${l.productId}|${l.marketplaceId}`));
   const stockRows = allStockRows.filter((r) => activeListingKeys.has(`${r.productId}|${r.marketplaceId}`));
   const warehouseRows = allWarehouseRows.filter((r) => activeListingKeys.has(`${r.productId}|${r.marketplaceId}`));
+  const fboFbsStockRows = fboFbsStockRowsRaw.filter(
+    (r) => r.warehouse.marketplaceId && activeListingKeys.has(`${r.productId}|${r.warehouse.marketplaceId}`)
+  );
   const marketplaceNameById = new Map<string, string>();
   for (const l of activeListings) marketplaceNameById.set(l.marketplaceId, l.marketplace.name);
   for (const r of allStockRows) marketplaceNameById.set(r.marketplaceId, r.marketplace.name);
@@ -119,6 +134,8 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
     leadTimeDays: number;
     buybackPct: number | null;
     qtyAvailable: number;
+    qtyAvailableFbo: number;
+    qtyAvailableFbs: number;
     avgDailySalesQty: number;
     avgDailySalesQty7d: number;
     seasonalDemandMultiplier: number;
@@ -143,6 +160,8 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
         leadTimeDays: product.supplier?.leadTimeDays ?? DEFAULT_LEAD_TIME_DAYS,
         buybackPct: buybackByProduct.get(productId) ?? null,
         qtyAvailable: 0,
+        qtyAvailableFbo: 0,
+        qtyAvailableFbs: 0,
         avgDailySalesQty: 0,
         avgDailySalesQty7d: 0,
         seasonalDemandMultiplier: Number(product.seasonalDemandMultiplier),
@@ -166,6 +185,12 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
     acc.qtyAvailable += r.qtyAvailable;
     acc.avgDailySalesQty += Number(r.avgDailySalesQty);
     acc.avgDailySalesQty7d += Number(r.avgDailySalesQty7d);
+  }
+  for (const r of fboFbsStockRows) {
+    const acc = byProduct.get(r.productId);
+    if (!acc) continue;
+    if (r.warehouse.type === "MARKETPLACE_FBO") acc.qtyAvailableFbo += r.qtyAvailable;
+    else if (r.warehouse.type === "MARKETPLACE_FBS") acc.qtyAvailableFbs += r.qtyAvailable;
   }
 
   const rows: PlannerRow[] = [...byProduct.values()]
@@ -193,6 +218,8 @@ export async function buildPlannerData(supplierCountry: SupplierCountry): Promis
         leadTimeDays: acc.leadTimeDays,
         buybackPct: acc.buybackPct,
         qtyAvailable: acc.qtyAvailable,
+        qtyAvailableFbo: acc.qtyAvailableFbo,
+        qtyAvailableFbs: acc.qtyAvailableFbs,
         qtyInTransit,
         avgDailySalesQty: Math.round(acc.avgDailySalesQty * 100) / 100,
         avgDailySalesQty7d: Math.round(acc.avgDailySalesQty7d * 100) / 100,

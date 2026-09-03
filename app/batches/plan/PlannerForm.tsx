@@ -277,6 +277,8 @@ export default function PlannerForm({
                     <td>{r.vendorCode ?? "—"}</td>
                     <td>{r.supplierName ?? "—"}</td>
                     <td>{stats.qtyAvailable}</td>
+                    <td>{r.qtyAvailableFbo || "—"}</td>
+                    <td>{r.qtyAvailableFbs || "—"}</td>
                     <td>{r.qtyInTransit || "—"}</td>
                     <td>{stats.avgDailySalesQty || "—"}</td>
                     <td>{stats.avgDailySalesQty7d || "—"}</td>

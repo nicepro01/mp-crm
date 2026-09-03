@@ -233,9 +233,12 @@ export async function syncWbStockImport(marketplace: Marketplace) {
 }
 
 export async function syncOzonStockImport(marketplace: Marketplace) {
-  const warehouse = await prisma.warehouse.findFirst({ where: { marketplaceId: marketplace.id, type: "MARKETPLACE_FBO" } });
-  if (!warehouse) {
-    throw new MarketplaceNotConfiguredError(`Склад «${marketplace.name}» FBO не найден — откройте страницу «Склады», он создастся автоматически`);
+  const [fboWarehouse, fbsWarehouse] = await Promise.all([
+    prisma.warehouse.findFirst({ where: { marketplaceId: marketplace.id, type: "MARKETPLACE_FBO" } }),
+    prisma.warehouse.findFirst({ where: { marketplaceId: marketplace.id, type: "MARKETPLACE_FBS" } }),
+  ]);
+  if (!fboWarehouse || !fbsWarehouse) {
+    throw new MarketplaceNotConfiguredError(`Склады «${marketplace.name}» FBO/FBS не найдены — откройте страницу «Склады», они создадутся автоматически`);
   }
 
   const dateTo = new Date();
@@ -263,7 +266,7 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
   for (const attr of attributes) {
     if (!attr.ozonSku || seenOzonSkus.has(attr.ozonSku)) continue;
     seenOzonSkus.add(attr.ozonSku);
-    rows.push({ vendorCode: attr.offerId, ozonSku: attr.ozonSku, qtyAvailable: 0 });
+    rows.push({ vendorCode: attr.offerId, ozonSku: attr.ozonSku, qtyAvailable: 0, qtyAvailableFbo: 0, qtyAvailableFbs: 0 });
   }
 
   const vendorCodeBySku = new Map(rows.map((r) => [r.ozonSku, r.vendorCode]));
@@ -316,15 +319,26 @@ export async function syncOzonStockImport(marketplace: Marketplace) {
 
     if (matchedProductId) {
       await prisma.stock.upsert({
-        where: { productId_warehouseId: { productId: matchedProductId, warehouseId: warehouse.id } },
+        where: { productId_warehouseId: { productId: matchedProductId, warehouseId: fboWarehouse.id } },
         create: {
           companyId: getCurrentCompanyId(),
           productId: matchedProductId,
-          warehouseId: warehouse.id,
-          qtyAvailable: row.qtyAvailable,
+          warehouseId: fboWarehouse.id,
+          qtyAvailable: row.qtyAvailableFbo,
           syncSource: "ozon_api",
         },
-        update: { qtyAvailable: row.qtyAvailable, syncSource: "ozon_api", syncedAt: new Date() },
+        update: { qtyAvailable: row.qtyAvailableFbo, syncSource: "ozon_api", syncedAt: new Date() },
+      });
+      await prisma.stock.upsert({
+        where: { productId_warehouseId: { productId: matchedProductId, warehouseId: fbsWarehouse.id } },
+        create: {
+          companyId: getCurrentCompanyId(),
+          productId: matchedProductId,
+          warehouseId: fbsWarehouse.id,
+          qtyAvailable: row.qtyAvailableFbs,
+          syncSource: "ozon_api",
+        },
+        update: { qtyAvailable: row.qtyAvailableFbs, syncSource: "ozon_api", syncedAt: new Date() },
       });
 
       // Донасыщаем реальными вес/габаритами, фото и названием от площадки —

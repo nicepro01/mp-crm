@@ -40,7 +40,9 @@ async function ozonPost<T>(marketplaceId: string, path: string, body: unknown): 
 export type OzonStockRow = {
   vendorCode: string; // offer_id — собственный артикул продавца
   ozonSku: string; // sku — числовой ID Ozon, используем как mpSku
-  qtyAvailable: number; // present - reserved, только склады FBO
+  qtyAvailable: number; // present - reserved, FBO + FBS вместе — общий остаток товара
+  qtyAvailableFbo: number;
+  qtyAvailableFbs: number;
 };
 
 type StocksResponse = {
@@ -54,10 +56,12 @@ type StocksResponse = {
 
 /**
  * Тянет остатки по всем товарам через Ozon Seller API (/v4/product/info/stocks,
- * курсорная пагинация). Берём только склады FBO (Ozon делит остаток на
- * десятки региональных складов, но present/reserved здесь уже агрегированы
- * по всем ним) — то же допущение, что и у ручного XLSX-импорта: FBS-остатки
- * Ozon не считаем.
+ * курсорная пагинация). Один и тот же ответ уже содержит обе схемы —
+ * type="fbo" (десятки региональных складов Ozon, present/reserved здесь уже
+ * агрегированы по всем ним) и type="fbs" (собственный склад продавца под
+ * управлением Ozon) — раньше FBS-запись игнорировалась и не учитывалась
+ * нигде, из-за чего товары, продающиеся только по FBS, вообще выпадали из
+ * остатков. Строка попадает в результат, если есть хотя бы одна из схем.
  */
 export async function fetchOzonStocks(marketplaceId: string): Promise<OzonStockRow[]> {
   const rows: OzonStockRow[] = [];
@@ -72,11 +76,16 @@ export async function fetchOzonStocks(marketplaceId: string): Promise<OzonStockR
 
     for (const item of page.items) {
       const fbo = item.stocks.find((s) => s.type === "fbo");
-      if (!fbo) continue;
+      const fbs = item.stocks.find((s) => s.type === "fbs");
+      if (!fbo && !fbs) continue;
+      const qtyAvailableFbo = fbo ? Math.max(0, fbo.present - fbo.reserved) : 0;
+      const qtyAvailableFbs = fbs ? Math.max(0, fbs.present - fbs.reserved) : 0;
       rows.push({
         vendorCode: item.offer_id,
-        ozonSku: String(fbo.sku),
-        qtyAvailable: Math.max(0, fbo.present - fbo.reserved),
+        ozonSku: String((fbo ?? fbs)!.sku),
+        qtyAvailable: qtyAvailableFbo + qtyAvailableFbs,
+        qtyAvailableFbo,
+        qtyAvailableFbs,
       });
     }
 

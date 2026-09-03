@@ -21,6 +21,14 @@ export type PlannerRow = {
   moq: number | null;
   leadTimeDays: number;
   qtyAvailable: number;
+  // Тот же остаток, но по схеме продажи — реально лежит на FBO-складе
+  // площадки (Ozon/Яндекс.Маркет её собственные региональные склады) или на
+  // FBS-складе (площадка забирает со своего/арендованного склада продавца).
+  // У WB отдельного FBS-отслеживания пока нет, там всегда 0. Сумма по всем
+  // площадкам сразу — если товар продаётся по обеим схемам на нескольких
+  // площадках, это уже общий итог, не в разрезе конкретной площадки.
+  qtyAvailableFbo: number;
+  qtyAvailableFbs: number;
   qtyInTransit: number;
   avgDailySalesQty: number;
   // То же самое, но за последние 7 дней — для сравнения с 28-дневным
@@ -76,6 +84,8 @@ export type SortKey =
   | "vendorCode"
   | "supplierName"
   | "qtyAvailable"
+  | "qtyAvailableFbo"
+  | "qtyAvailableFbs"
   | "qtyInTransit"
   | "avgDailySalesQty"
   | "avgDailySalesQty7d"
@@ -88,6 +98,8 @@ export const columns: { key: SortKey; label: string; type: "string" | "number" }
   { key: "vendorCode", label: "Артикул поставщика", type: "string" },
   { key: "supplierName", label: "Поставщик", type: "string" },
   { key: "qtyAvailable", label: "Остаток", type: "number" },
+  { key: "qtyAvailableFbo", label: "Остаток FBO", type: "number" },
+  { key: "qtyAvailableFbs", label: "Остаток FBS", type: "number" },
   { key: "qtyInTransit", label: "В пути", type: "number" },
   { key: "avgDailySalesQty", label: "Продаж/день (28д)", type: "number" },
   { key: "avgDailySalesQty7d", label: "Продаж/день (7д)", type: "number" },
@@ -129,6 +141,8 @@ function compareByKey(
   if (key === "vendorCode") return compareForSort(a.vendorCode, b.vendorCode, "string", dir);
   if (key === "supplierName") return compareForSort(a.supplierName, b.supplierName, "string", dir);
   if (key === "qtyInTransit") return compareForSort(a.qtyInTransit, b.qtyInTransit, "number", dir);
+  if (key === "qtyAvailableFbo") return compareForSort(a.qtyAvailableFbo, b.qtyAvailableFbo, "number", dir);
+  if (key === "qtyAvailableFbs") return compareForSort(a.qtyAvailableFbs, b.qtyAvailableFbs, "number", dir);
   const col = columns.find((c) => c.key === key);
   const statsA = displayStats(a, statsOverride);
   const statsB = displayStats(b, statsOverride);
