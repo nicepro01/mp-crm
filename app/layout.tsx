@@ -42,6 +42,7 @@ export default function RootLayout({
           <a href="/stock">Остатки</a>
           <a href="/analytics">Аналитика</a>
           <a href="/unit-economics">Юнит-экономика</a>
+          <a href="/research">Подбор товаров</a>
           <a href="/returns">Возвраты</a>
           <a href="/tasks">Задачи</a>
           <a href="/settings/integrations">Интеграции</a>

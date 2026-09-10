@@ -1,0 +1,169 @@
+import { PrismaClient } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
+import { getCurrentCompanyId } from "@/lib/tenantContext";
+import { DEFAULT_COST_MODEL, type CostModel } from "@/lib/researchEconomics";
+
+// Сервис mp-research может писать в другую базу, чем та, что использует mp-crm
+// в дев-режиме (у mp-crm локальный Postgres, у mp-research — Supabase).
+// RESEARCH_DATABASE_URL направляет запросы этой страницы в нужную базу.
+// В проде (mp-crm на той же Supabase) переменную можно не задавать.
+const globalForResearch = globalThis as unknown as { researchDb?: PrismaClient };
+const researchDb: PrismaClient | typeof prisma = process.env.RESEARCH_DATABASE_URL
+  ? (globalForResearch.researchDb ??= new PrismaClient({ datasourceUrl: process.env.RESEARCH_DATABASE_URL }))
+  : prisma;
+
+// Данные подбора товаров живут в отдельной Postgres-схеме `research`, которую
+// наполняет сервис mp-research (соседний репозиторий). Модели Prisma для неё
+// в этой схеме не описаны — читаем сырым SQL. $queryRaw/$executeRaw не проходят
+// через tenant-расширение (см. lib/prisma.ts), поэтому companyId подставляем
+// вручную.
+//
+// Пока сервис mp-research гоняется с COMPANY_ID=dev, а сессия mp-crm — с
+// реальным UUID компании. Переменная RESEARCH_COMPANY_ID позволяет указать,
+// чьи строки показывать (по умолчанию — компания текущей сессии).
+function researchCompanyId(): string {
+  return process.env.RESEARCH_COMPANY_ID || getCurrentCompanyId();
+}
+
+export type ResearchStatus =
+  | "new"
+  | "actionable"
+  | "review"
+  | "rejected"
+  | "no_match"
+  | "approved"
+  | "snoozed";
+
+export interface ResearchCandidate {
+  id: string;
+  status: ResearchStatus;
+  categoryPath: string;
+  refTitle: string | null;
+  refPrice: number;
+  refMonthlyUnits: number;
+  refReviewCount: number;
+  score: number | null;
+  maxCogs: number | null;
+  profitPerMonth: number | null;
+  marginPct: number | null;
+  roiPct: number | null;
+  // косто-модель, по которой стадия 4 посчитала (для расшивки/«что если»)
+  costModel: CostModel;
+  match: {
+    price: number;
+    priceFits: boolean;
+    confidence: number;
+    store: string;
+    url: string;
+    title: string;
+  } | null;
+}
+
+interface Row {
+  id: string;
+  status: string;
+  categoryPath: string;
+  refTitle: string | null;
+  refPrice: string | number;
+  refMonthlyUnits: number;
+  refReviewCount: number;
+  score: string | number | null;
+  maxCogs: string | number | null;
+  profitPerMonth: string | number | null;
+  marginPct: string | number | null;
+  roiPct: string | number | null;
+  costModel: unknown;
+  match_price: string | number | null;
+  match_price_fits: boolean | null;
+  match_confidence: string | number | null;
+  match_store: string | null;
+  match_url: string | null;
+  match_title: string | null;
+}
+
+const num = (v: string | number | null | undefined): number | null =>
+  v === null || v === undefined ? null : typeof v === "number" ? v : Number(v);
+
+export async function getResearchCandidates(): Promise<{
+  candidates: ResearchCandidate[];
+  error: string | null;
+}> {
+  const companyId = researchCompanyId();
+  try {
+    const rows = await researchDb.$queryRawUnsafe<Row[]>(
+      `
+      SELECT
+        c.id, c.status, c."categoryPath", c."refTitle",
+        c."refPrice", c."refMonthlyUnits", c."refReviewCount", c.score,
+        e."maxCogs", e."profitPerMonth", e."marginPct", e."roiPct", e."costModel",
+        m.confidence      AS match_confidence,
+        m."priceFits"     AS match_price_fits,
+        w."wholesalePrice" AS match_price,
+        w."storeSlug"     AS match_store,
+        w.url             AS match_url,
+        w.title           AS match_title
+      FROM research."Candidate" c
+      LEFT JOIN research."UnitEcon" e ON e."candidateId" = c.id
+      LEFT JOIN LATERAL (
+        SELECT * FROM research."SupplierMatch" sm
+        WHERE sm."candidateId" = c.id
+        ORDER BY sm.confidence DESC
+        LIMIT 1
+      ) m ON true
+      LEFT JOIN research."WikkeoProduct" w ON w.id = m."wikkeoProductId"
+      WHERE c."companyId" = $1
+      ORDER BY c.score DESC NULLS LAST, c."createdAt" DESC
+      `,
+      companyId,
+    );
+
+    const candidates = rows.map((r): ResearchCandidate => ({
+      id: r.id,
+      status: r.status as ResearchStatus,
+      categoryPath: r.categoryPath,
+      refTitle: r.refTitle,
+      refPrice: num(r.refPrice) ?? 0,
+      refMonthlyUnits: r.refMonthlyUnits,
+      refReviewCount: r.refReviewCount,
+      score: num(r.score),
+      maxCogs: num(r.maxCogs),
+      profitPerMonth: num(r.profitPerMonth),
+      marginPct: num(r.marginPct),
+      roiPct: num(r.roiPct),
+      costModel:
+        r.costModel && typeof r.costModel === "object"
+          ? { ...DEFAULT_COST_MODEL, ...(r.costModel as Partial<CostModel>) }
+          : { ...DEFAULT_COST_MODEL },
+      match:
+        r.match_price === null
+          ? null
+          : {
+              price: num(r.match_price) ?? 0,
+              priceFits: Boolean(r.match_price_fits),
+              confidence: num(r.match_confidence) ?? 0,
+              store: r.match_store ?? "",
+              url: r.match_url ?? "",
+              title: r.match_title ?? "",
+            },
+    }));
+    return { candidates, error: null };
+  } catch (err: any) {
+    // Схемы `research` ещё нет / сервис mp-research не запускался.
+    return { candidates: [], error: err?.message ?? "Не удалось прочитать данные подбора" };
+  }
+}
+
+const ALLOWED: ResearchStatus[] = ["approved", "rejected", "review", "snoozed"];
+
+export async function setCandidateStatus(id: string, status: string): Promise<void> {
+  if (!ALLOWED.includes(status as ResearchStatus)) {
+    throw new Error(`Недопустимый статус: ${status}`);
+  }
+  const companyId = researchCompanyId();
+  await researchDb.$executeRawUnsafe(
+    `UPDATE research."Candidate" SET status = $1 WHERE id = $2 AND "companyId" = $3`,
+    status,
+    id,
+    companyId,
+  );
+}
