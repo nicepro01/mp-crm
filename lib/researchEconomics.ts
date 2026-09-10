@@ -184,6 +184,61 @@ export function computeUnitEconomics(args: {
   };
 }
 
+// Что удерживает Ozon из суммы заказа (определяет «к выплате»).
+export const OZON_DEDUCTION_KEYS = [
+  "commission",
+  "logisticsFbs",
+  "processing",
+  "lastMile",
+  "acquiring",
+  "returnsCost",
+] as const;
+// Мои расходы после выплаты (кроме рекламы и налога — они отдельными строками).
+export const MY_COST_KEYS = ["cogs", "inbound", "packaging", "storage", "rko"] as const;
+
+export interface EconomicsSummary {
+  sellPrice: number; // покупатель платит
+  ozon: { key: string; amount: number; source: CostSource }[];
+  ozonTotal: number; // сумма удержаний Ozon
+  payout: number; // К ВЫПЛАТЕ от Ozon = цена − удержания
+  ads: number; // реклама, аллоцированная на юнит
+  mine: { key: string; amount: number; source: CostSource }[];
+  mineTotal: number; // мои расходы (закупка, логистика, упаковка, РКО…)
+  tax: number; // налог УСН 6% (с полной цены)
+  netProfit: number; // ЧИСТЫМИ на юнит
+  marginPct: number;
+  roiPct: number;
+  profitPerMonth: number;
+}
+
+export function summarizeEconomics(r: UnitEconomicsResult): EconomicsSummary {
+  const pick = (keys: readonly string[]) =>
+    keys
+      .filter((k) => r.lineItems[k])
+      .map((k) => ({ key: k, amount: r.lineItems[k].amount, source: r.lineItems[k].source }));
+  const ozon = pick(OZON_DEDUCTION_KEYS);
+  const mine = pick(MY_COST_KEYS);
+  const ozonTotal = round2(ozon.reduce((s, x) => s + x.amount, 0));
+  const mineTotal = round2(mine.reduce((s, x) => s + x.amount, 0));
+  const ads = r.lineItems.ads?.amount ?? 0;
+  const tax = r.lineItems.tax?.amount ?? 0;
+  const payout = round2(r.sellPrice - ozonTotal);
+  return {
+    sellPrice: r.sellPrice,
+    ozon,
+    ozonTotal,
+    payout,
+    ads,
+    mine,
+    mineTotal,
+    tax,
+    netProfit: round2(payout - ads - mineTotal - tax),
+    marginPct: r.marginPct,
+    roiPct: r.roiPct,
+    profitPerMonth: r.profitPerMonth,
+  };
+}
+
 export function maxCogsForTargetMargin(args: {
   sellPrice: number;
   targetMarginPct: number;

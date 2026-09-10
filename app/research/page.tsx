@@ -71,10 +71,13 @@ async function ResearchPageContent() {
                 <th>Ниша / товар</th>
                 <th style={{ textAlign: "right" }}>Цена Ozon</th>
                 <th style={{ textAlign: "right" }}>Прод./мес</th>
-                <th style={{ textAlign: "right" }}>Макс. закупка</th>
-                <th style={{ textAlign: "right" }}>Прибыль/мес</th>
+                <th style={{ textAlign: "right" }}>Закупка</th>
+                <th style={{ textAlign: "right" }}>Удержит Ozon</th>
+                <th style={{ textAlign: "right" }}>К выплате</th>
+                <th style={{ textAlign: "right" }}>Чистыми/шт</th>
                 <th style={{ textAlign: "right" }}>Маржа</th>
                 <th style={{ textAlign: "right" }}>ROI</th>
+                <th style={{ textAlign: "right" }}>Чистыми/мес</th>
                 <th style={{ textAlign: "right" }}>Score</th>
                 <th>Поставщик Wikkeo</th>
                 <th>Решение</th>
@@ -90,10 +93,28 @@ async function ResearchPageContent() {
                   </td>
                   <td style={{ textAlign: "right" }}>{rub(c.refPrice)}</td>
                   <td style={{ textAlign: "right" }}>{c.refMonthlyUnits}</td>
-                  <td style={{ textAlign: "right" }}>{rub(c.maxCogs)}</td>
-                  <td style={{ textAlign: "right" }}>{rub(c.profitPerMonth)}</td>
-                  <td style={{ textAlign: "right" }}>{pct(c.marginPct)}</td>
-                  <td style={{ textAlign: "right" }}>{pct(c.roiPct)}</td>
+                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                    {rub(c.cogsUsed)}
+                    <div className="muted" style={{ fontSize: 11 }}>
+                      {c.cogsIsReal ? "поставщик" : "оценка (макс.)"}
+                    </div>
+                  </td>
+                  <td style={{ textAlign: "right" }}>{rub(c.ozonDeductions)}</td>
+                  <td style={{ textAlign: "right" }}>{rub(c.payout)}</td>
+                  <td
+                    style={{ textAlign: "right", fontWeight: 600 }}
+                    className={c.netProfitPerUnit >= 0 ? "margin-positive" : "margin-negative"}
+                  >
+                    {rub(c.netProfitPerUnit)}
+                  </td>
+                  <td
+                    style={{ textAlign: "right" }}
+                    className={c.netMarginPct >= 0 ? "margin-positive" : "margin-negative"}
+                  >
+                    {pct(c.netMarginPct)}
+                  </td>
+                  <td style={{ textAlign: "right" }}>{pct(c.netRoiPct)}</td>
+                  <td style={{ textAlign: "right" }}>{rub(c.netProfitPerMonth)}</td>
                   <td style={{ textAlign: "right" }}>{c.score === null ? "—" : Math.round(c.score)}</td>
                   <td>
                     {c.match ? (
@@ -117,15 +138,13 @@ async function ResearchPageContent() {
                   </td>
                 </tr>,
                 <tr key={c.id + "-econ"}>
-                  <td colSpan={11} style={{ paddingTop: 0 }}>
+                  <td colSpan={14} style={{ paddingTop: 0 }}>
                     <details>
                       <summary style={{ cursor: "pointer", color: "var(--muted)" }}>Расшивка расходов / «что если»</summary>
                       <CostBreakdown
                         sellPrice={c.refPrice}
                         monthlyUnits={c.refMonthlyUnits}
-                        initialCogs={
-                          c.match && c.match.priceFits ? c.match.price : c.maxCogs ?? Math.round(c.refPrice * 0.3)
-                        }
+                        initialCogs={c.cogsUsed}
                         costModel={c.costModel}
                       />
                     </details>

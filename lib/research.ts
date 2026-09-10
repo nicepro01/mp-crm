@@ -1,7 +1,12 @@
 import { PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentCompanyId } from "@/lib/tenantContext";
-import { DEFAULT_COST_MODEL, type CostModel } from "@/lib/researchEconomics";
+import {
+  DEFAULT_COST_MODEL,
+  computeUnitEconomics,
+  summarizeEconomics,
+  type CostModel,
+} from "@/lib/researchEconomics";
 
 // Сервис mp-research может писать в другую базу, чем та, что использует mp-crm
 // в дев-режиме (у mp-crm локальный Postgres, у mp-research — Supabase).
@@ -44,11 +49,18 @@ export interface ResearchCandidate {
   refReviewCount: number;
   score: number | null;
   maxCogs: number | null;
-  profitPerMonth: number | null;
-  marginPct: number | null;
-  roiPct: number | null;
   // косто-модель, по которой стадия 4 посчитала (для расшивки/«что если»)
   costModel: CostModel;
+  // Экономика при РЕАЛЬНОЙ закупке (цена найденного поставщика, если влезает
+  // в maxCogs), иначе при maxCogs. Всё на юнит, ₽.
+  cogsUsed: number;
+  cogsIsReal: boolean; // true — цена поставщика с Wikkeo, false — оценка maxCogs
+  ozonDeductions: number; // сколько удержит Ozon (комиссия+логистика+…)
+  payout: number; // к выплате на счёт
+  netProfitPerUnit: number; // чистыми на юнит
+  netMarginPct: number;
+  netRoiPct: number;
+  netProfitPerMonth: number;
   match: {
     price: number;
     priceFits: boolean;
@@ -117,24 +129,16 @@ export async function getResearchCandidates(): Promise<{
       companyId,
     );
 
-    const candidates = rows.map((r): ResearchCandidate => ({
-      id: r.id,
-      status: r.status as ResearchStatus,
-      categoryPath: r.categoryPath,
-      refTitle: r.refTitle,
-      refPrice: num(r.refPrice) ?? 0,
-      refMonthlyUnits: r.refMonthlyUnits,
-      refReviewCount: r.refReviewCount,
-      score: num(r.score),
-      maxCogs: num(r.maxCogs),
-      profitPerMonth: num(r.profitPerMonth),
-      marginPct: num(r.marginPct),
-      roiPct: num(r.roiPct),
-      costModel:
+    const candidates = rows.map((r): ResearchCandidate => {
+      const refPrice = num(r.refPrice) ?? 0;
+      const refMonthlyUnits = r.refMonthlyUnits ?? 0;
+      const maxCogs = num(r.maxCogs);
+      const costModel: CostModel =
         r.costModel && typeof r.costModel === "object"
           ? { ...DEFAULT_COST_MODEL, ...(r.costModel as Partial<CostModel>) }
-          : { ...DEFAULT_COST_MODEL },
-      match:
+          : { ...DEFAULT_COST_MODEL };
+
+      const match =
         r.match_price === null
           ? null
           : {
@@ -144,8 +148,44 @@ export async function getResearchCandidates(): Promise<{
               store: r.match_store ?? "",
               url: r.match_url ?? "",
               title: r.match_title ?? "",
-            },
-    }));
+            };
+
+      // COGS для строки: реальная цена поставщика, если влезает в maxCogs;
+      // иначе оценка maxCogs; иначе грубо 30% от цены.
+      const cogsReal = match && match.priceFits ? match.price : null;
+      const cogsUsed = cogsReal ?? maxCogs ?? Math.round(refPrice * 0.3);
+      const cogsIsReal = cogsReal !== null;
+
+      const econ = computeUnitEconomics({
+        sellPrice: refPrice,
+        cogs: cogsUsed,
+        monthlyUnits: refMonthlyUnits,
+        model: costModel,
+      });
+      const s = summarizeEconomics(econ);
+
+      return {
+        id: r.id,
+        status: r.status as ResearchStatus,
+        categoryPath: r.categoryPath,
+        refTitle: r.refTitle,
+        refPrice,
+        refMonthlyUnits,
+        refReviewCount: r.refReviewCount,
+        score: num(r.score),
+        maxCogs,
+        costModel,
+        cogsUsed,
+        cogsIsReal,
+        ozonDeductions: s.ozonTotal,
+        payout: s.payout,
+        netProfitPerUnit: s.netProfit,
+        netMarginPct: s.marginPct,
+        netRoiPct: s.roiPct,
+        netProfitPerMonth: s.profitPerMonth,
+        match,
+      };
+    });
     return { candidates, error: null };
   } catch (err: any) {
     // Схемы `research` ещё нет / сервис mp-research не запускался.
