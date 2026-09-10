@@ -116,15 +116,18 @@ async function ResearchPageContent() {
                   <td style={{ textAlign: "right" }}>{pct(c.netRoiPct)}</td>
                   <td style={{ textAlign: "right" }}>{rub(c.netProfitPerMonth)}</td>
                   <td style={{ textAlign: "right" }}>{c.score === null ? "—" : Math.round(c.score)}</td>
-                  <td>
+                  <td style={{ maxWidth: 260 }}>
                     {c.match ? (
                       <>
                         <a href={c.match.url} target="_blank" rel="noreferrer">
-                          {rub(c.match.price)}
-                        </a>{" "}
-                        <span className={c.match.priceFits ? "margin-positive" : "margin-negative"}>
-                          {c.match.priceFits ? "в цене" : "дорого"}
-                        </span>
+                          {c.match.title || "открыть"}
+                        </a>
+                        <div style={{ fontSize: 12 }}>
+                          <strong>{rub(c.match.price)}</strong>{" "}
+                          <span className={c.match.priceFits ? "margin-positive" : "margin-negative"}>
+                            {c.match.priceFits ? "в цене" : "дорого"}
+                          </span>
+                        </div>
                         <div className="muted" style={{ fontSize: 12 }}>
                           {c.match.store} · conf {c.match.confidence.toFixed(2)}
                         </div>
