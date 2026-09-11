@@ -27,6 +27,11 @@ const rub = (n: number | null) =>
   n === null ? "—" : Math.round(n).toLocaleString("ru-RU") + " ₽";
 const pct = (n: number | null) => (n === null ? "—" : Math.round(n) + "%");
 
+// Прямая ссылка на товар (/item/:slug) иногда может не открыться (сбой на
+// стороне Wikkeo, устаревший индекс поиска) — рядом всегда держим рабочий
+// запасной вариант: поиск по названию на самом сайте.
+const wikkeoSearchUrl = (q: string) => `https://wikkeo.com/search?search=${encodeURIComponent(q)}`;
+
 async function ResearchPageContent() {
   const { candidates, error } = await getResearchCandidates();
 
@@ -129,7 +134,10 @@ async function ResearchPageContent() {
                           </span>
                         </div>
                         <div className="muted" style={{ fontSize: 12 }}>
-                          {c.match.store} · conf {c.match.confidence.toFixed(2)}
+                          {c.match.store} · conf {c.match.confidence.toFixed(2)} ·{" "}
+                          <a href={wikkeoSearchUrl(c.match.title || c.refTitle || c.categoryPath)} target="_blank" rel="noreferrer">
+                            найти поиском
+                          </a>
                         </div>
                       </>
                     ) : (
