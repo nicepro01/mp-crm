@@ -30,6 +30,25 @@ function researchCompanyId(): string {
   return process.env.RESEARCH_COMPANY_ID || getCurrentCompanyId();
 }
 
+// Supabase-пулер время от времени рвёт соединение на секунду-другую (см.
+// mp-research/src/retry.ts — та же беда там). Без повтора это превращало
+// всю страницу /research в пустой экран с ошибкой при каждом таком блипе.
+async function withRetry<T>(fn: () => Promise<T>, tries = 3, baseMs = 800): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 1; i <= tries; i++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      const msg = String(err?.message ?? err);
+      const transient = msg.includes("Can't reach database server") || msg.includes("P1001") || msg.includes("P1017");
+      if (!transient || i === tries) throw err;
+      await new Promise((r) => setTimeout(r, baseMs * i));
+    }
+  }
+  throw lastErr;
+}
+
 export type ResearchStatus =
   | "new"
   | "actionable"
@@ -102,7 +121,8 @@ export async function getResearchCandidates(): Promise<{
 }> {
   const companyId = researchCompanyId();
   try {
-    const rows = await researchDb.$queryRawUnsafe<Row[]>(
+    const rows = await withRetry(() =>
+      researchDb.$queryRawUnsafe<Row[]>(
       `
       SELECT
         c.id, c.status, c."categoryPath", c."refTitle",
@@ -126,7 +146,8 @@ export async function getResearchCandidates(): Promise<{
       WHERE c."companyId" = $1
       ORDER BY c.score DESC NULLS LAST, c."createdAt" DESC
       `,
-      companyId,
+        companyId,
+      ),
     );
 
     const candidates = rows.map((r): ResearchCandidate => {
@@ -200,10 +221,12 @@ export async function setCandidateStatus(id: string, status: string): Promise<vo
     throw new Error(`Недопустимый статус: ${status}`);
   }
   const companyId = researchCompanyId();
-  await researchDb.$executeRawUnsafe(
+  await withRetry(() =>
+    researchDb.$executeRawUnsafe(
     `UPDATE research."Candidate" SET status = $1 WHERE id = $2 AND "companyId" = $3`,
-    status,
-    id,
-    companyId,
+      status,
+      id,
+      companyId,
+    ),
   );
 }
