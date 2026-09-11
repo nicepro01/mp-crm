@@ -124,8 +124,17 @@ async function ResearchPageContent() {
                   <td style={{ maxWidth: 260 }}>
                     {c.match ? (
                       <>
-                        <a href={c.match.url} target="_blank" rel="noreferrer">
-                          {c.match.title || "открыть"}
+                        {/* Прямая ссылка на карточку (/item/:slug) у Wikkeo часто
+                            ведёт на "Страница не найдена" — их поисковый индекс
+                            отстаёт от реального каталога (нашёл, а товар уже сняли).
+                            Поэтому основное действие — поиск по названию на самом
+                            сайте, он всегда актуален; прямая ссылка — как подсказка. */}
+                        <a
+                          href={wikkeoSearchUrl(c.match.title || c.refTitle || c.categoryPath)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {c.match.title || "искать"}
                         </a>
                         <div style={{ fontSize: 12 }}>
                           <strong>{rub(c.match.price)}</strong>{" "}
@@ -135,8 +144,8 @@ async function ResearchPageContent() {
                         </div>
                         <div className="muted" style={{ fontSize: 12 }}>
                           {c.match.store} · conf {c.match.confidence.toFixed(2)} ·{" "}
-                          <a href={wikkeoSearchUrl(c.match.title || c.refTitle || c.categoryPath)} target="_blank" rel="noreferrer">
-                            найти поиском
+                          <a href={c.match.url} target="_blank" rel="noreferrer" title="может вести на «Страница не найдена» — карточка могла устареть">
+                            прямая ссылка
                           </a>
                         </div>
                       </>
