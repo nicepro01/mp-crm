@@ -169,7 +169,7 @@ export default function PlannerForm({
           м³ · {subtotal.boxes} кор.
         </div>
 
-        <div className="table-scroll table-scroll-bounded">
+        <div className="table-scroll">
           <table>
             <thead>
               <tr>
